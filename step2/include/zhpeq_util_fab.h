@@ -255,11 +255,15 @@ int _fab_eq_cm_event(const char *callf, uint line,
 #define fab_eq_cm_event(...) \
     _fab_eq_cm_event(__func__, __LINE__, __VA_ARGS__)
 
-int _fab_mrmem_alloc(const char *callf, uint line, struct fab_conn *conn,
-                     struct fab_mrmem *mrmem, size_t len, uint64_t access);
+int _fab_mrmem_alloc_aligned(const char *callf, uint line,
+                             struct fab_conn *conn, struct fab_mrmem *mrmem,
+                             size_t len, uint64_t access, size_t alignment);
+
+#define fab_mrmem_alloc_aligned(...) \
+    _fab_mrmem_alloc_aligned(__func__, __LINE__, __VA_ARGS__)
 
 #define fab_mrmem_alloc(...) \
-    _fab_mrmem_alloc(__func__, __LINE__, __VA_ARGS__)
+    _fab_mrmem_alloc_aligned(__func__, __LINE__, __VA_ARGS__, page_size)
 
 int fab_mrmem_free(struct fab_mrmem *mrmem);
 

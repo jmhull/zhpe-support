@@ -566,13 +566,13 @@ int _fab_eq_cm_event(const char *callf, uint line,
     return ret;
 }
 
-int _fab_mrmem_alloc(const char *callf, uint line,
-                     struct fab_conn *conn, struct fab_mrmem *mrmem,
-                     size_t len, uint64_t access)
+int _fab_mrmem_alloc_aligned(const char *callf, uint line,
+                             struct fab_conn *conn, struct fab_mrmem *mrmem,
+                             size_t len, uint64_t access, size_t alignment)
 {
     int                 ret = 0;
 
-    ret = -posix_memalign(&mrmem->mem, page_size, len);
+    ret = -posix_memalign(&mrmem->mem, alignment, len);
     if (ret) {
         mrmem->mem = NULL;
         print_func_errn(callf, line, "posix_memalign",
