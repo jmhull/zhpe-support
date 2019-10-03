@@ -86,6 +86,10 @@ enum zhpeq_atomic_op {
     ZHPEQ_ATOMIC_CAS            = ZHPE_HW_OPCODE_ATM_CAS,
 };
 
+#define	ZHPEQ_HOSTS_FILE	"/etc/hosts.zhpeq"
+#define	ZHPEQ_HOSTS_ENV         "ZHPEQ_HOSTS"
+
+
 #define ZHPEQ_CQ_STATUS_SUCCESS ZHPE_HW_CQ_STATUS_SUCCESS
 #define ZHPEQ_CQ_STATUS_CMD_TRUNCATED \
     ZHPE_HW_CQ_STATUS_TRUNCATED

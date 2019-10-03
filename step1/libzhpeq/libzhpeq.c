@@ -63,7 +63,7 @@ static void __attribute__((constructor)) lib_init(void)
     void                *dlhandle = dlopen(BACKNAME, RTLD_NOW);
 
     if (!dlhandle) {
-        print_err("Failed to load %s:%s\n", BACKNAME, dlerror());
+        zhpeu_print_err("Failed to load %s:%s\n", BACKNAME, dlerror());
         abort();
     }
 }
@@ -87,7 +87,7 @@ void zhpeq_register_backend(enum zhpe_backend backend, struct backend_ops *ops)
         break;
 
     default:
-        print_err("Unexpected backed %d\n", backend);
+        zhpeu_print_err("Unexpected backed %d\n", backend);
         break;
     }
 }
@@ -98,7 +98,7 @@ int zhpeq_init(int api_version)
     static int          init_status = 1;
 
     if (init_status > 0) {
-        if (!expected_saw("api_version", ZHPEQ_API_VERSION, api_version))
+        if (!zhpeu_expected_saw("api_version", ZHPEQ_API_VERSION, api_version))
             goto done;
 
         mutex_lock(&init_mutex);
@@ -197,13 +197,13 @@ int zhpeq_free(struct zhpeq *zq)
 
     ret = 0;
     /* Unmap qcm, wq, and cq. */
-    rc = do_munmap((void *)zq->qcm, zq->xqinfo.qcm.size);
+    rc = _zhpeu_munmap((void *)zq->qcm, zq->xqinfo.qcm.size);
     if (ret >= 0 && rc < 0)
         ret = rc;
-    rc = do_munmap(zq->wq, zq->xqinfo.cmdq.size);
+    rc = _zhpeu_munmap(zq->wq, zq->xqinfo.cmdq.size);
     if (ret >= 0 && rc < 0)
         ret = rc;
-    rc = do_munmap(zq->cq, zq->xqinfo.cmplq.size);
+    rc = _zhpeu_munmap(zq->cq, zq->xqinfo.cmplq.size);
     if (ret >= 0 && rc < 0)
         ret = rc;
 
@@ -278,17 +278,20 @@ int zhpeq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
     /* zq->fd == -1 means we're faking things out. */
     flags = (zq->fd == -1 ? MAP_ANONYMOUS | MAP_PRIVATE : MAP_SHARED);
     /* Map registers, wq, and cq. */
-    zq->qcm = do_mmap(NULL, zq->xqinfo.qcm.size, PROT_READ | PROT_WRITE,
-                      flags, zq->fd, zq->xqinfo.qcm.off, &ret);
-    if (!zq->qcm)
+    ret = _zhpeu_mmap((void **)&zq->qcm, zq->xqinfo.qcm.size,
+                      PROT_READ | PROT_WRITE, flags, zq->fd,
+                      zq->xqinfo.qcm.off);
+    if (ret < 0)
         goto done;
-    zq->wq = do_mmap(NULL, zq->xqinfo.cmdq.size, PROT_READ | PROT_WRITE,
-                     flags, zq->fd, zq->xqinfo.cmdq.off, &ret);
-    if (!zq->wq)
+    ret = _zhpeu_mmap((void **)&zq->wq, zq->xqinfo.cmdq.size,
+                      PROT_READ | PROT_WRITE, flags, zq->fd,
+                      zq->xqinfo.cmdq.off);
+    if (ret < 0)
         goto done;
-    zq->cq = do_mmap(NULL, zq->xqinfo.cmplq.size, PROT_READ | PROT_WRITE,
-                     flags, zq->fd, zq->xqinfo.cmplq.off, &ret);
-    if (!zq->cq)
+    ret = _zhpeu_mmap((void **)&zq->cq, zq->xqinfo.cmplq.size,
+                      PROT_READ | PROT_WRITE, flags, zq->fd,
+                      zq->xqinfo.cmplq.off);
+    if (ret < 0)
         goto done;
     if (b_ops->qalloc_post) {
         ret = b_ops->qalloc_post(zq);
@@ -852,7 +855,7 @@ int zhpeq_qkdata_import(struct zhpeq_dom *zdom, int open_idx,
     if (!blob || blob_len != sizeof(*pdata))
         goto done;
 
-    desc = malloc(sizeof(*desc));
+    desc = calloc_cachealigned(1, sizeof(*desc));
     if (!desc) {
         ret = -ENOMEM;
         goto done;
@@ -980,9 +983,9 @@ ssize_t zhpeq_cq_read(struct zhpeq *zq, struct zhpeq_cq_entry *entries,
         zhpe_stats_stamp(zhpe_stats_subid(ZHPQ, 80), (uintptr_t)zq,
                          entries[i].z.index, (uintptr_t)entries[i].z.context);
         if (entries[i].z.status != ZHPEQ_CQ_STATUS_SUCCESS)
-            print_err("%s,%u:head 0x%x index 0x%x status 0x%x\n",
-                      __func__, __LINE__, old, entries[i].z.index,
-                      entries[i].z.status);
+            zhpeu_print_err("%s,%u:head 0x%x index 0x%x status 0x%x\n",
+                            __func__, __LINE__, old, entries[i].z.index,
+                            entries[i].z.status);
         old = new;
         i++;
     }
@@ -1043,6 +1046,108 @@ int zhpeq_getaddr(struct zhpeq *zq, void *sa, size_t *sa_len)
     return ret;
 }
 
+int zhpeq_getzaddr(const char *host, const char *service,
+                   struct sockaddr_zhpe *zaddr)
+{
+	int			ret = -FI_EINVAL;
+	FILE			*gcid_file = NULL;
+	const char		*gcid_fname;
+	uint			gcid;
+        ulong                   ctxid;
+	char			*name;
+	int			n;
+        char                    *e;
+	char			line[FI_NAME_MAX * 2];
+
+        if (!host || !zaddr)
+            goto done;
+
+        ctxid = ZHPE_SZQ_INVAL;
+        if (service) {
+            errno = 0;
+            ctxid = strtoul(service, &e, 0);
+            if (errno != 0) {
+                ret = -errno;
+                goto done;
+            }
+            if (*e != '\0')
+                goto done;
+            if (ctxid & ~(ulong)ZHPE_CTXID_MASK)
+                goto done;
+        }
+        zaddr->sz_family = AF_ZHPE;
+        uuid_clear(zaddr->sz_uuid);
+        zaddr->zq_queue = ctxid;
+        if (isdigit(host[0])) {
+            errno = 0;
+            gcid = strtoul(gcid, &e, 0);
+            if (errno != 0) {
+                ret = -errno;
+                goto done;
+            }
+            if (*e != '\0')
+                goto done;
+            if (gcid & ~(ulong)ZHPE_GCID_MASK)
+                goto done;
+            zhpeu_install_gcid_in_uuid(zaddr->sz_uuid, gcid);
+            ret = 0;
+            goto done;
+        }
+
+	gcid_fname = getenv(ZHPEQ_HOSTS_GCID_ENV);
+	if (!gcid_fname)
+		gcid_fname = ZHPEQ_HOSTS_GCID_FILE;
+	gcid_file = fopen(gcid_file, "r");
+	if (!gcid_file) {
+		ret = -errno;
+		ZHPE_LOG_ERROR("Error %d opening %s:%s\n",
+			       ret, gcid_fname, strerror(-ret));
+		goto done;
+	}
+        ret = -FI_ENOENT;
+	for (;;) {
+		if (!fgets(line, sizeof(line), gcid_file)) {
+			if (ferror(gcid_file)) {
+				ret = -errno;
+				ZHPE_LOG_ERROR("Error %d reading %s:%s\n",
+					       ret, gcid_fname, strerror(-ret));
+				break;
+			}
+			if (feof(gcid_file))
+				break;
+			continue;
+		}
+		n = sscanf(line, "%ms %x\n", &name, &gcid);
+		if (n == 2) {
+			if (!strcasecmp(host, name)) {
+				free(name);
+				if (gcid & ~GCID_MASK) {
+					ret = -FI_EINVAL;
+                                        goto done;
+                                }
+                                zhpeu_install_gcid_in_uuid(zaddr->sz_uuid,
+                                                           gcid);
+                                ret = gcid;
+				break;
+			}
+		}
+		if (n >= 1) {
+			free(name);
+			n = 0;
+		}
+	}
+ done:
+	if (gcid_file)
+		fclose(gcid_file);
+
+	return ret;
+}
+
+bool zhpeq_is_asic(void)
+{
+    return b_zhpe;
+}
+
 void zhpeq_print_qkdata(const char *func, uint line,
                         const struct zhpeq_key_data *qkdata)
 {
@@ -1074,11 +1179,6 @@ void zhpeq_print_qcm(const char *func, uint line, const struct zhpeq *zq)
         print_qcm1(func, line, zq->qcm, i);
     for (i = 0x40; i < 0x108; i += 0x40)
         print_qcm1(func, line, zq->qcm, i);
-}
-
-bool zhpeq_is_asic(void)
-{
-    return b_zhpe;
 }
 
 static uint wq_opcode(union zhpe_hw_wq_entry *wqe)

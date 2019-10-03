@@ -371,9 +371,8 @@ int _fab_listener_setup(const char *callf, uint line, int backlog,
     if (backlog) {
         ret = fi_control(&listener->pep->fid, FI_BACKLOG, &backlog);
         if (ret < 0 && ret != -FI_ENOSYS) {
-            print_errs(callf, line,
-                       errf_str("fi_control(FI_BACKLOG = %d)", backlog),
-                       ret, fi_strerror(-ret));
+            zhpeu_print_errs(ret, fi_strerror(-ret),
+                             "fi_control(FI_BACKLOG = %d)", backlog);
             goto done;
         }
     }
