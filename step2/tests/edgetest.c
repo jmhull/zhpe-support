@@ -297,7 +297,7 @@ static int zq_op(struct zhpeq *zq, bool read, void *lcl_buf, uint64_t lcl_zaddr,
         goto done;
     }
     while (!(ret = zq_completions(zq)));
-    if (ret > 0 && !expected_saw("completions", 1, ret))
+    if (ret > 0 && !expected_saw("completions", (int64_t)1, ret))
         ret = -EIO;
 
  done:

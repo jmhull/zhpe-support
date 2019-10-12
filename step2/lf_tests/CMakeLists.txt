@@ -1,3 +1,5 @@
+add_compile_options(-D_ZHPEQ_TEST_COMPAT_)
+
 add_executable(atomtest atomtest.c)
 target_link_libraries(atomtest PUBLIC zhpeq_util_fab zhpeq)
 

@@ -1046,6 +1046,7 @@ int zhpeq_getaddr(struct zhpeq *zq, void *sa, size_t *sa_len)
     return ret;
 }
 
+#if 0
 int zhpeq_getzaddr(const char *host, const char *service,
                    struct sockaddr_zhpe *zaddr)
 {
@@ -1142,6 +1143,7 @@ int zhpeq_getzaddr(const char *host, const char *service,
 
 	return ret;
 }
+#endif
 
 bool zhpeq_is_asic(void)
 {

@@ -1,3 +1,5 @@
+add_compile_options(-D_ZHPEQ_TEST_COMPAT_)
+
 add_executable(edgetest edgetest.c)
 target_link_libraries(edgetest PUBLIC zhpeq zhpeq_util)
 

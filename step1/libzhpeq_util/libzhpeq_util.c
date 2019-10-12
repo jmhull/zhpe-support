@@ -90,7 +90,7 @@ static void __attribute__((constructor)) lib_init(void)
     atm_cmpxchg(&zhpeu_init_time, &oldi, &init_time);
 }
 
-void zhpeq_util_init(char *argv0, int default_log_level, bool use_syslog)
+void zhpeu_util_init(char *argv0, int default_log_level, bool use_syslog)
 {
     /* Allow to be called multiple times for testing. */
     zhpeu_appname = basename(argv0);
@@ -894,7 +894,7 @@ static int sockaddr_cmpx(const union sockaddr_in46 *sa1,
             break;
 
     default:
-        ret = memcmp(&sa1->sa_family, &sa2->sa_family, sizeof(sa1->sa_family));
+        ret = arithcmp(sa1->sa_family, sa2->sa_family);
         goto done;
 
     }
@@ -912,17 +912,16 @@ static int sockaddr_cmpx(const union sockaddr_in46 *sa1,
             break;
 
     default:
-        ret = memcmp(&sa1->sa_family, &sa2->sa_family, sizeof(sa1->sa_family));
+        ret = arithcmp(sa1->sa_family, sa2->sa_family);
         goto done;
 
     }
 
     /* We'll only get here if both addresses can be "reduced" to IPv4. */
-    ret = memcmp(&local1.addr4.sin_addr, &local2.addr4.sin_addr,
-                 sizeof(local1.addr4.sin_addr));
+    ret = arithcmp(local1.addr4.sin_addr.s_addr, local2.addr4.sin_addr.s_addr);
     if (ret)
         goto done;
-    ret = arithcmp((ntohs(local1.sin_port), ntohs(local2.sin_port));
+    ret = arithcmp(ntohs(local1.sin_port), ntohs(local2.sin_port));
  done:
 
     return ret;
@@ -942,7 +941,7 @@ uint32_t zhpeu_sockaddr_porth(const void *addr)
         return ntohl(sa->zhpe.sz_queue);
 
     default:
-        return 0;
+        abort();
     }
 }
 
@@ -982,15 +981,16 @@ void zhpeu_sockaddr_cpy(union sockaddr_in46 *dst, const void *src)
     memcpy(dst, src, zhpeu_sockaddr_len(src));
 }
 
-union sockaddr_in46 *zhpeu_sockaddr_dup(const void *addr)
+void *zhpeu_sockaddr_dup(const void *addr)
 {
-    union sockaddr_in46 *ret = NULL;
+    void                *ret = NULL;
     size_t              addr_len = zhpeu_sockaddr_len(addr);
 
-    if (addr_len)
-        ret = malloc(sizeof(*ret));
-    if (ret)
-        memcpy(ret, addr, addr_len);
+    if (addr_len) {
+        ret = malloc(addr_len);
+        if (ret)
+            memcpy(ret, addr, addr_len);
+    }
 
     return ret;
 }
@@ -1011,9 +1011,12 @@ void zhpeu_install_gcid_in_uuid(uuid_t uuid, uint32_t gcid)
 
 bool zhpeu_uuid_gcid_only(const uuid_t uuid)
 {
+    uint                i;
+    uuid_t              uuid_x;
+
     if (uuid[3] & 0xF)
         return false;
-    for (i = 4; i < ARRAY_SIZE(uuid); i++) {
+    for (i = 4; i < ARRAY_SIZE(uuid_x); i++) {
         if (uuid[i])
             return false;
     }
@@ -1029,7 +1032,6 @@ int zhpeu_sockaddr_portcmp(const void *addr1, const void *addr2)
 
     assert(sa1->sa_family == sa2->sa_family);
 
-    /* Use memcmp for -1, 0, 1 behavior. */
     switch (sa1->sa_family) {
 
     case AF_INET:
@@ -1048,7 +1050,7 @@ int zhpeu_sockaddr_portcmp(const void *addr1, const void *addr2)
     return ret;
 }
 
-int zhpeu_sockaddr_cmp(const void *addr1, const void *addr2)
+int zhpeu_sockaddr_cmp(const void *addr1, const void *addr2, uint flags)
 {
     int                 ret;
     const union sockaddr_in46 *sa1 = addr1;
@@ -1061,36 +1063,46 @@ int zhpeu_sockaddr_cmp(const void *addr1, const void *addr2)
         goto done;
     }
 
-    /* Use memcmp for -1, 0, 1 behavior. */
     switch (sa1->sa_family) {
 
     case AF_INET:
-        ret = memcmp(&sa1->addr4.sin_addr, &sa2->addr4.sin_addr,
-                     sizeof(sa1->addr4.sin_addr));
+        if (!(flags & ZHPEU_SACMP_PORT_ONLY))
+            ret = arithcmp(sa1->addr4.sin_addr.s_addr,
+                           sa2->addr4.sin_addr.s_addr);
+        else
+            ret = 0;
         if (ret)
             goto done;
-        ret = arithcmp(ntohs(sa1->sin_port), ntohs(sa2->sin_port));
+        if (!(flags & ZHPEU_SACMP_ADDR_ONLY))
+            ret = arithcmp(ntohs(sa1->sin_port), ntohs(sa2->sin_port));
         break;
 
     case AF_INET6:
-        ret = memcmp(&sa1->addr6.sin6_addr, &sa2->addr6.sin6_addr,
-                     sizeof(sa1->addr6.sin6_addr));
+        /* Use memcmp for -1, 0, 1 behavior. */
+        if (!(flags & ZHPEU_SACMP_PORT_ONLY))
+            ret = memcmp(&sa1->addr6.sin6_addr, &sa2->addr6.sin6_addr,
+                         sizeof(sa1->addr6.sin6_addr));
+        else
+            ret = 0;
         if (ret)
             goto done;
-        ret = arithcmp(ntohs(sa1->sin_port), ntohs(sa2->sin_port));
+        if (!(flags & ZHPEU_SACMP_ADDR_ONLY))
+            ret = arithcmp(ntohs(sa1->sin_port), ntohs(sa2->sin_port));
         break;
 
     case AF_ZHPE:
-        gcid1 = zhpeu_uuid_to_gcid(sa1->zhpe.sz_uuid);
-        gcid2 = zhpeu_uuid_to_gcid(sa2->zhpe.sz_uuid);
-        ret = arithcmp(gcid1, gcid2);
+        if (!(flags & ZHPEU_SACMP_PORT_ONLY)) {
+            gcid1 = zhpeu_uuid_to_gcid(sa1->zhpe.sz_uuid);
+            gcid2 = zhpeu_uuid_to_gcid(sa2->zhpe.sz_uuid);
+            ret = arithcmp(gcid1, gcid2);
+        }
+        else
+            ret = 0;
         if (ret)
             goto done;
-        ret = arithcmp(ntohl(sa1->zhpe.sz_queue), ntohl(sa2->zhpe.sz_queue));
-        if (ret)
-            goto done;
-        if (ntohl(sa1->zhpe.sz_queue) != ZHPE_SZQ_INVAL)
-            ret = uuid_compare(sa1->zhpe.sz_uuid, sa2->zhpe.sz_uuid);
+        if (!(flags & ZHPEU_SACMP_ADDR_ONLY))
+            ret = arithcmp(ntohl(sa1->zhpe.sz_queue),
+                           ntohl(sa2->zhpe.sz_queue));
         break;
 
     default:
@@ -1103,7 +1115,6 @@ int zhpeu_sockaddr_cmp(const void *addr1, const void *addr2)
 
 bool zhpeu_sockaddr_inet(const void *addr)
 {
-    bool                ret = false;
     const union sockaddr_in46 *sa = addr;
 
     switch (sa->sa_family) {
@@ -1453,7 +1464,7 @@ char *zhpeu_asprintf(const char *fmt, ...)
     va_list             ap;
 
     va_start(ap, fmt);
-    ret = vasprintf(&ret, fmt, ap);
+    rc = vasprintf(&ret, fmt, ap);
     va_end(ap);
     if (rc == -1) {
         errno = ENOMEM;
@@ -1463,14 +1474,7 @@ char *zhpeu_asprintf(const char *fmt, ...)
     return ret;
 }
 
-<<<<<<< Updated upstream
-/* Don't want to require _GNU_SOURCE in header. */
 void zhpeu_yield(void)
 {
-    abort_posix(pthread_yield,);
-=======
-int zhpeu_yield(void)
-{
-    return pthread_yield();
->>>>>>> Stashed changes
+    zhpeu_posixcall(zhpeu_fatal, pthread_yield,);
 }

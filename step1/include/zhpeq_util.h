@@ -119,7 +119,7 @@ _EXTERN_C_BEG
     __auto_type         __a = (_a);                             \
     __auto_type         __b = (_b);                             \
     /* Force compilation error if different types. */           \
-    typeof(&__a)        __p = &__b MAYBE_UNUSED;                \
+    typeof(&__a)        __p MAYBE_UNUSED;                       \
     __p = &__b;                                                 \
                                                                 \
      ((__a) < (__b) ? -1 : ((__a) > (__b) ? 1 : 0));            \
@@ -155,7 +155,6 @@ typedef unsigned long long ullong;
 typedef unsigned char   uchar;
 
 extern const char       *zhpeu_appname;
-// #define appname zhpeu_appname
 
 /* Borrow AF_APPLETALK since it should never be seen. */
 #define AF_ZHPE         AF_APPLETALK
@@ -163,9 +162,7 @@ extern const char       *zhpeu_appname;
 #define ZHPE_WILDCARD           (0)     /* Valid, but reserved by driver. */
 #define ZHPE_SZQ_INVAL          (~(uint32_t)0)
 
-#define ZHPE_GCID_BITS          (28)
 #define ZHPE_GCID_MASK          ((1U << ZHPE_GCID_BITS) - 1)
-#define ZHPE_CTXID_BITS         (24)
 #define ZHPE_CTXID_MASK         ((1U << ZHPE_CTXID_BITS) - 1)
 
 #define ZHPE_SZQ_FLAGS_MASK     (0xFFU << ZHPE_CTXID_BITS)
@@ -283,7 +280,7 @@ static inline int fls64(uint64_t v)
 
 #endif /* __GNUC__ */
 
-void zhpeq_util_init(char *argv0, int default_log_level, bool use_syslog);
+void zhpeu_util_init(char *argv0, int default_log_level, bool use_syslog);
 void zhpeu_print_dbg(const char *fmt, ...) PRINTF_ARGS(1, 2);
 void zhpeu_print_info(const char *fmt, ...) PRINTF_ARGS(1, 2);
 void zhpeu_print_err(const char *fmt, ...) PRINTF_ARGS(1, 2);
@@ -331,9 +328,9 @@ void zhpeu_dbg(const char *callf, uint line, const char *errf, int ret);
     __ret;                                                      \
 })
 
-#define zhpeu_call_neg(_err_handler, _func, ...)                \
+#define zhpeu_call_neg(_err_handler, _func, _rtype, ...)        \
 ({                                                              \
-    int                 __ret = _func(__VA_ARGS__);             \
+    _rtype               __ret = _func(__VA_ARGS__);            \
                                                                 \
     if (unlikely(__ret < 0))                                    \
         _err_handler(__func__, __LINE__, #_func, __ret);        \
@@ -364,8 +361,10 @@ uint32_t zhpeu_sockaddr_porth(const void *addr);
 size_t zhpeu_sockaddr_len(const void *addr);
 bool zhpeu_sockaddr_valid(const void *addr, size_t addr_len, bool check_len);
 void zhpeu_sockaddr_cpy(union sockaddr_in46 *dst, const void *src);
-int zhpeu_sockaddr_portcmp(const void *addr1, const void *addr2);
-int zhpeu_sockaddr_cmp(const void *addr1, const void *addr2);
+void *zhpeu_sockaddr_dup(const void *addr);
+int zhpeu_sockaddr_cmp(const void *addr1, const void *addr2, uint flags);
+#define ZHPEU_SACMP_ADDR_ONLY   (0x1)
+#define ZHPEU_SACMP_PORT_ONLY   (0x2)
 bool zhpeu_sockaddr_inet(const void *addr);
 bool zhpeu_sockaddr_wildcard(const void *addr);
 bool zhpeu_sockaddr_loopback(const void *addr, bool loopany);
@@ -392,9 +391,6 @@ char *zhpeu_sockaddr_str(const void *addr);
     }                                                           \
     __ret;                                                      \
 })
-
-/* Just a call to free for things that need a function pointer. */
-void zhpeu_free_ptr(void *ptr);
 
 /* Trying to rely on stdatomic.h with less verbosity.
  * I'm not at all convinced they do the right thing with fences, in general,
@@ -686,8 +682,8 @@ char *zhpeu_get_cpuinfo_val(FILE *fp, char *buf, size_t buf_size,
 #define cond_wait(...)                                          \
     zhpeu_posixcall(zhpeu_fatal, pthread_cond_wait, __VA_ARGS__)
 #define cond_timedwait(...)                                     \
-    zhpeu_posixcall_errorok(                                    \
-        zhpeu_fatal, pthread_cond_timedwait, -ETIMEDOUT, __VA_ARGS__)
+    zhpeu_posixcall_errorok(zhpeu_fatal, pthread_cond_timedwait,\
+                            -ETIMEDOUT, __VA_ARGS__)
 #define mutexattr_settype(...)                                  \
     zhpeu_posixcall(zhpeu_fatal, pthread_mutexattr_settype, __VA_ARGS__)
 #define mutexattr_init(...)                                     \
@@ -713,72 +709,26 @@ char *zhpeu_get_cpuinfo_val(FILE *fp, char *buf, size_t buf_size,
 #define spin_unlock(...)                                        \
     zhpeu_posixcall(zhpeu_fatal, pthread_spin_unlock, __VA_ARGS__)
 
-/* Keep _GNU_SOURCE out of the headers. */
-
-char *zhpeu_asprintf(const char *fmt, ...) PRINTF_ARGS(1, 2);
-#define _zhpeu_asprintf(...)                                    \
-    zhpeu_call_null(zhpeu_fatal, zhpeu_asprintf, __VA_ARGS__)
-
-int zhpeu_yield(void);
-#define _zhpeu_yield(...)                                       \
-    zhpeu_posixcall(zhpeu_fatal, zhpeu_yield, __VA_ARGS__)
-
 /* publib-like no-fail APIs without publib. */
-
-static inline void *xmalloc(size_t size)
-{
-    void                *ret;
-
-    if (likely(size))
-        ret = malloc(size);
-    else
-        ret = NULL;
-
-    return ret;
-}
-
-static inline void *xrealloc(void *ptr, size_t size)
-{
-    void                *ret;
-
-    if (likely(ptr && size))
-        ret = realloc(ptr, size);
-    else
-        ret = NULL;
-
-    return ret;
-}
-
-static inline void *xcalloc(size_t nmemb, size_t size)
-{
-    void                *ret;
-
-    /* Revisit:add check for overflow? */
-    size *= nmemb;
-    if (likely(size))
-        ret = malloc(size);
-    else
-        ret = NULL;
-
-    return ret;
-}
-
-void zhpeu_yield(void);
-
-#define yield()         zhpeu_yield()
 
 #define xposix_memalign(...)                                    \
     zhpeu_posixcall(zhpeu_fatal, posix_memalign, __VA_ARGS__)
 #define xmalloc(...)                                            \
-    zhpeu_call_null(zhpeu_fatal, xmalloc, void *, __VA_ARGS__)
+    zhpeu_call_null(zhpeu_fatal, malloc, void *, __VA_ARGS__)
 #define xrealloc(...)                                           \
-    zhpeu_call_null(zhpeu_fatal, xrealloc, void *, __VA_ARGS__)
+    zhpeu_call_null(zhpeu_fatal, realloc, void *, __VA_ARGS__)
 #define xcalloc(...)                                            \
-    zhpeu_call_null(zhpeu_fatal, xcalloc, void *, __VA_ARGS__)
-#define xasprintf(...)                                          \
-    zhpeu_syscall(zhpeu_fatal, asprintf, __VA_ARGS__)
+    zhpeu_call_null(zhpeu_fatal, calloc, void *, __VA_ARGS__)
 
-static inline void *xmalloc_aligned(size_t alignment, size_t size)
+/* Keep _GNU_SOURCE out of the headers. */
+char *zhpeu_asprintf(const char *fmt, ...) PRINTF_ARGS(1, 2);
+#define xasprintf(...)                                          \
+    zhpeu_syscall(zhpeu_fatal, zhpeu_asprintf, __VA_ARGS__)
+
+void zhpeu_yield(void);
+#define yield()         zhpeu_yield()
+
+static inline void *malloc_aligned(size_t alignment, size_t size)
 {
     void                *ret;
 
@@ -789,40 +739,50 @@ static inline void *xmalloc_aligned(size_t alignment, size_t size)
     return ret;
 }
 
-static inline void *xcalloc_aligned(size_t alignment, size_t nmemb, size_t size)
+static inline void *malloc_cachealigned(size_t size)
+{
+    return malloc_aligned(zhpeu_init_time->l1sz, size);
+}
+
+static inline void *calloc_aligned(size_t alignment, size_t nmemb, size_t size)
 {
     void                *ret;
 
     /* Revisit:add check for overflow? */
     size *= nmemb;
-    ret = xmalloc_aligned(alignment, size);
+    ret = malloc_aligned(alignment, size);
     if (likely(ret))
         memset(ret, 0, size);
 
     return ret;
 }
 
-#define xmalloc_aligned(...)                                    \
-    zhpeu_call_null(zhpeu_fatal, xmalloc_aligned, void *, __VA_ARGS__)
-#define xmalloc_cachealigned(_size)                             \
-    xmalloc_aligned(L1_CACHE_BYTES, (_size))
-#define xcalloc_aligned(...)                                    \
-    zhpeu_call_null(zhpeu_fatal, xcalloc_aligned, void *, __VA_ARGS__)
-#define xcalloc_cachealigned(_nmemb, _size)                     \
-    xcalloc_aligned(L1_CACHE_BYTES, (_nmemb), (_size))
+static inline void *calloc_cachealigned(size_t nmemb, size_t size)
+{
+    return calloc_aligned(zhpeu_init_time->l1sz, nmemb, size);
+}
 
-#define xstrdup(_s)                                             \
+#define xmalloc_aligned(...)                                    \
+    zhpeu_call_null(zhpeu_fatal, malloc_aligned, void *, __VA_ARGS__)
+#define xmalloc_cachealigned(...)                               \
+    zhpeu_call_null(zhpeu_fatal, malloc_cachealigned, void *, __VA_ARGS__)
+#define xcalloc_aligned(...)                                    \
+    zhpeu_call_null(zhpeu_fatal, calloc_aligned, void *, __VA_ARGS__)
+#define xcalloc_cachealigned(...)                               \
+    zhpeu_call_null(zhpeu_fatal, calloc_cachealigned, void *, __VA_ARGS__)
+
+#define xstrdup_or_null(_s)                                     \
 ({                                                              \
     void                *__ret;                                 \
     const char          *__s = (_s);                            \
                                                                 \
     if (likely(__s))                                            \
-        __ret = zhpeu_call_null(zhpeu_fatal, strdup,            \
-                                char *, s);                     \
+        __ret = zhpeu_call_null(zhpeu_fatal, strdup, char *,    \
+                                __s);                           \
     else                                                        \
         __ret = NULL;                                           \
                                                                 \
-    return __ret;                                               \
+    __ret;                                                      \
 })
 
 #define xmemdup(_mem, _bytes)                                   \
@@ -836,13 +796,59 @@ static inline void *xcalloc_aligned(size_t alignment, size_t nmemb, size_t size)
         memcpy(__ret, __mem, __bytes);                          \
     }                                                           \
                                                                 \
-    return __ret;                                               \
+    __ret;                                                      \
+})
+
+#define _strdup_or_null(_s)                                     \
+({                                                              \
+    void                *__ret;                                 \
+    const char          *__s = (_s);                            \
+                                                                \
+    if (likely(__s))                                            \
+        __ret = zhpeu_call_null(zhpeu_err, strdup, char *, __s);\
+    else                                                        \
+        __ret = NULL;                                           \
+                                                                \
+    __ret;                                                      \
+})
+
+#define _memdup(_mem, _bytes)                                   \
+({                                                              \
+    void                *__ret;                                 \
+    const void          *__mem = (_mem);                        \
+    size_t              __bytes = (_bytes);                     \
+                                                                \
+    if (likely(__mem && __bytes)) {                             \
+        __ret = _malloc(__bytes);                               \
+        memcpy(__ret, __mem, __bytes);                          \
+    }                                                           \
+                                                                \
+    __ret;                                                      \
 })
 
 /*
  * Wrappers for calls where errors may not necessaily be fatal.
  * Leading '_' allows callers a choice to not use the wrappers.
  */
+
+#define _posix_memalign(...)                                    \
+    zhpeu_posixcall(zhpeu_err, posix_memalign, __VA_ARGS__)
+#define _malloc(...)                                            \
+    zhpeu_call_null(zhpeu_err, malloc, void *, __VA_ARGS__)
+#define _realloc(...)                                           \
+    zhpeu_call_null(zhpeu_err, xrealloc, void *, __VA_ARGS__)
+#define _calloc(...)                                            \
+    zhpeu_call_null(zhpeu_err, xcalloc, void *, __VA_ARGS__)
+#define _asprintf(...)                                          \
+    zhpeu_syscall(zhpeu_err, asprintf, __VA_ARGS__)
+#define _malloc_aligned(...)                                    \
+    zhpeu_call_null(zhpeu_err, malloc_aligned, void *, __VA_ARGS__)
+#define _malloc_cachealigned(...)                               \
+    zhpeu_call_null(zhpeu_err, malloc_cachealigned, void *, __VA_ARGS__)
+#define _calloc_aligned(...)                                    \
+    zhpeu_call_null(zhpeu_err, calloc_aligned, void *, __VA_ARGS__)
+#define _calloc_cachealigned(...)                               \
+    zhpeu_call_null(zhpeu_err, calloc_cachealigned, void *, __VA_ARGS__)
 
 #define _zhpeu_sockaddr_ntop(...)                               \
     zhpeu_call_null(zhpeu_sockaddr_ntop, char *, __VA_ARGS__)
@@ -851,29 +857,29 @@ static inline void *xcalloc_aligned(size_t alignment, size_t nmemb, size_t size)
 #define _zhpeu_get_cpu_info_val(...)                            \
     zhpeu_call_null(zhpeu_dbg, zhpeu_get_cpuinfo_val, char *, __VA_ARGS__)
 #define _zhpeu_parse_kb_uint64_t(...)                           \
-    zhpeu_call_null(zhpeu_dbg, zhpeu_parse_kb_uint64_t, char *, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_dbg, zhpeu_parse_kb_uint64_t, int, __VA_ARGS__)
 #define _zhpeu_sock_getaddrinfo(...)                            \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_getaddrinfo, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_getaddrinfo, int, __VA_ARGS__)
 #define _zhpeu_sock_connect(...)                                \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_connect, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_connect, int, __VA_ARGS__)
 #define _zhpeu_sock_getsockname(...)                            \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_getsockname, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_getsockname, int, __VA_ARGS__)
 #define _zhpeu_sock_getpeername(...)                            \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_getpeername, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_getpeername, int, __VA_ARGS__)
 #define _zhpeu_sock_send_blob(...)                              \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_send_blob, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_send_blob, int, __VA_ARGS__)
 #define _zhpeu_sock_recv_fixed_blob(...)                        \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_recv_fixed_blob, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_recv_fixed_blob, int, __VA_ARGS__)
 #define _zhpeu_sock_recv_var_blob(...)                          \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_recv_var_blob, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_recv_var_blob, int, __VA_ARGS__)
 #define _zhpeu_sock_send_string(...)                            \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_send_string, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_send_string, int, __VA_ARGS__)
 #define _zhpeu_sock_recv_string(...)                            \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_recv_string, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_recv_string, int, __VA_ARGS__)
 #define _zhpeu_munmap(...)                                      \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_munmap, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_dbg, zhpeu_munmap, int, __VA_ARGS__)
 #define _zhpeu_mmap(...)                                        \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_mmap, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_dbg, zhpeu_mmap, int, __VA_ARGS__)
 #define _zhpeu_get_cpuinfo_val(...)                             \
     zhpeu_call_null(zhpeu_dbg, zhpeu_get_cpuinfo_val, void *, __VA_ARGS__)
 
@@ -890,25 +896,61 @@ static inline uint64_t roundup_pow_of_2(uint64_t val)
     return ((uint64_t)1 << (fls64(val) + 1));
 }
 
-static inline uint64_t page_off(uint64_t addr)
+static inline uint64_t mask2_off(uint64_t val, uint64_t size)
 {
-    uint64_t            page_off_mask = (uint64_t)(page_size - 1);
+    uint64_t            mask = (size - 1);
 
-    return (addr & page_off_mask);
+    /* size must be power of 2. */
+    assert(!(size & (size -1)));
+    return (val & mask);
 }
 
-static inline uint64_t page_down(uint64_t addr)
+static inline uint64_t mask2_down(uint64_t val, uint64_t size)
 {
-    uint64_t            page_mask = ~(uint64_t)(page_size - 1);
+    uint64_t            mask = ~(size - 1);
 
-    return (addr & page_mask);
+    /* size must be power of 2. */
+    assert(!(size & (size -1)));
+    return (val & mask);
 }
 
-static inline uint64_t page_up(uint64_t addr)
+static inline uint64_t mask2_up(uint64_t val, uint64_t size)
 {
-    uint64_t            page_mask = ~(uint64_t)(page_size - 1);
+    uint64_t            mask = ~(size - 1);
 
-    return (((addr + page_size - 1) & page_mask));
+    /* size must be power of 2. */
+    assert(!(size & (size -1)));
+    return ((val + size - 1) & mask);
+}
+
+static inline uint64_t page_off(uint64_t val)
+{
+    return mask2_off(val, page_size);
+}
+
+static inline uint64_t page_down(uint64_t val)
+{
+    return mask2_down(val, page_size);
+}
+
+static inline uint64_t page_up(uint64_t val)
+{
+    return mask2_up(val, page_size);
+}
+
+static inline uint64_t l1_off(uint64_t val)
+{
+    return mask2_off(val, zhpeu_init_time->l1sz);
+}
+
+static inline uint64_t l1_down(uint64_t val)
+{
+    return mask2_down(val, zhpeu_init_time->l1sz);
+}
+
+static inline uint64_t l1_up(uint64_t val)
+{
+    return mask2_up(val, zhpeu_init_time->l1sz);
 }
 
 struct zhpeu_thr_wait {
@@ -1043,6 +1085,35 @@ static inline void zhpeu_work_queue(struct zhpeu_work_head *head,
 }
 
 bool zhpeu_work_process(struct zhpeu_work_head *head, bool lock, bool unlock);
+
+#ifdef _ZHPEQ_TEST_COMPAT_
+
+#define appname                 zhpeu_appname
+#define connect_sock            _zhpeu_sock_connect
+#define do_getaddrinfo          zhpeu_sock_getaddrinfo
+#define expected_saw            zhpeu_expected_saw
+#define parse_kb_uint64_t(_callf, _line, ...)                   \
+    _zhpeu_parse_kb_uint64_t(__VA_ARGS__)
+#define print_dbg               zhpeu_print_dbg
+#define print_err               zhpeu_print_err
+#define print_func_err          zhpeu_print_func_err
+#define print_func_errn         zhpeu_print_func_errn
+#define print_info              zhpeu_print_info
+#define print_range_err         zhpeu_print_range_err
+#define print_usage             zhpeu_print_usage
+#define print_usage             zhpeu_print_usage
+#define random_array            zhpeu_random_array
+#define random_range            zhpeu_random_range
+#define random_seed             zhpeu_random_seed
+#define sock_send_blob          _zhpeu_sock_send_blob
+#define sock_recv_fixed_blob    _zhpeu_sock_recv_fixed_blob
+#define sock_send_string        _zhpeu_sock_send_string
+#define sock_recv_string        _zhpeu_sock_recv_string
+#define sockaddr_dup            zhpeu_sockaddr_dup
+#define sockaddr_valid          zhpeu_sockaddr_valid
+#define zhpeq_util_init         zhpeu_util_init
+
+#endif
 
 _EXTERN_C_END
 
