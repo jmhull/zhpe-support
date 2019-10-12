@@ -892,14 +892,14 @@ static int do_client_sum_check(struct stuff *conn[], const struct args *args)
             goto done;
         }
         counters.hw_atomics -= conn[i]->expected_hw;
-        if (!expected_saw("hw_ops %", 0,
+        if (!expected_saw("hw_ops %", (uint64_t)0,
                           counters.hw_atomics % CLI_SUM_OPS_SIZE)) {
             ret = -FI_EINVAL;
             goto done;
         }
         counters.hw_atomics /= CLI_SUM_OPS_SIZE;
         conn[i]->ops_done -= conn[i]->expected_cli;
-        if (!expected_saw("cli_ops %", 0,
+        if (!expected_saw("cli_ops %", (uint64_t)0,
                           conn[i]->ops_done % CLI_SUM_OPS_SIZE)) {
             ret = -FI_EINVAL;
             goto done;
@@ -946,7 +946,7 @@ static int do_client_sum_check(struct stuff *conn[], const struct args *args)
         goto done;
     if (!expected_saw("res[0]", svr_msg.ops + cli_ops, results[0]))
         goto done;
-    if (!expected_saw("res[1]", (uint32_t)(svr_msg.ops + cli_ops), results[1]))
+    if (!expected_saw("res[1]", shift32(svr_msg.ops + cli_ops, 0), results[1]))
         goto done;
     if (!expected_saw("res[2]", shift32(svr_msg.ops, cli_ops), results[2]))
         goto done;

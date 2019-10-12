@@ -73,7 +73,7 @@ static bool pages_ok(const char *label, volatile void *ptr, size_t off,
         check_ptr = (void *)((char *)ptr + check_off);
         check_val = *check_ptr;
         if (zero) {
-            if (!expected_saw(label, 0, check_val))
+            if (!expected_saw(label, (uint64_t)0, check_val))
                 goto done;
             *check_ptr = off + check_off;
         } else if (!expected_saw(label, off + check_off, check_val))
@@ -113,9 +113,11 @@ static int qcm_ok(volatile void *qcm, struct zhpe_xqinfo *info, size_t i,
         check_off = 0x10;
         check_ptr = (void *)((char *)qcm + check_off);
         check_val = *check_ptr;
-        if (!expected_saw("cmdq.ent", info->cmdq.ent, check_val & 0xFFFFFFFFUL))
+        if (!expected_saw("cmdq.ent", (uint64_t)info->cmdq.ent,
+                          check_val & 0xFFFFFFFFUL))
             goto done;
-        if (!expected_saw("cmplq.ent", info->cmplq.ent, check_val >> 32))
+        if (!expected_saw("cmplq.ent", (uint64_t)info->cmplq.ent,
+                          check_val >> 32))
             goto done;
         check_off = 0x18;
         check_ptr = (void *)((char *)qcm + check_off);
@@ -133,33 +135,33 @@ static int qcm_ok(volatile void *qcm, struct zhpe_xqinfo *info, size_t i,
         check_off = 0x20;
         check_ptr = (void *)((char *)qcm + check_off);
         check_val = *check_ptr;
-        if (!expected_saw("mstop", 0, check_val))
+        if (!expected_saw("mstop", (uint64_t)0, check_val))
             goto done;
         check_off = 0x28;
         check_ptr = (void *)((char *)qcm + check_off);
         check_val = *check_ptr;
-        if (!expected_saw("active", 0x8000, check_val))
+        if (!expected_saw("active", (uint64_t)0x8000, check_val))
             goto done;
         check_off = 0x40;
         check_ptr = (void *)((char *)qcm + check_off);
         check_val = *check_ptr;
-        if (!expected_saw("stop", 0, check_val))
+        if (!expected_saw("stop", (uint64_t)0, check_val))
             goto done;
     }
     check_off = 0x80;
     check_ptr = (void *)((char *)qcm + check_off);
     check_val = *check_ptr;
-    if (!expected_saw("cmdt", 0, check_val))
+    if (!expected_saw("cmdt", (uint64_t)0, check_val))
         goto done;
     check_off = 0xc0;
     check_ptr = (void *)((char *)qcm + check_off);
     check_val = *check_ptr;
-    if (!expected_saw("cmph", 0, check_val))
+    if (!expected_saw("cmph", (uint64_t)0, check_val))
         goto done;
     check_off = 0x100;
     check_ptr = (void *)((char *)qcm + check_off);
     check_val = *check_ptr;
-    if (!expected_saw("cmpt", 0x80000000, check_val))
+    if (!expected_saw("cmpt", (uint64_t)0x80000000, check_val))
         goto done;
     if (!zhpe && !pages_ok("qcm", qcm, info->qcm.off, info->qcm.size, zero))
         goto done;

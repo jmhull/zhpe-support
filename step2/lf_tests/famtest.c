@@ -127,7 +127,8 @@ static int do_fam(const struct args *args)
         goto done;
     }
     for (i = 0; i < args->nfams; i++) {
-        if (zhpeu_asprintf(&url, "zhpe:///fam%Lu", (ullong)i) == -1) {
+        url = zhpeu_asprintf("zhpe:///fam%Lu", (ullong)i);
+        if (!url) {
             ret = -FI_ENOMEM;
             goto done;
         }
