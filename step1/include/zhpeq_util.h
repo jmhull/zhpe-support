@@ -130,7 +130,7 @@ _EXTERN_C_BEG
 #endif
 
 #define TO_PTR(_int)    (void *)(uintptr_t)(_int)
-#define VOID_OFF(_p, _o) (void *)((char *)(_p) + _o)
+#define VPTR(_p, _o)    (void *)((char *)(_p) + _o)
 
 #define FREE_IF(_ptr,_free)                                     \
 do {                                                            \

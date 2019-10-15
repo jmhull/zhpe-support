@@ -182,7 +182,7 @@ static int do_mem_setup(struct stuff *conn)
          goto done;
     }
     memset(conn->tx_addr, TX_NONE, req);
-    conn->rx_addr = (char *)conn->tx_addr + off;
+    conn->rx_addr = VPTR(conn->tx_addr, off);
 
     ret = zhpeq_mr_reg(conn->zdom, conn->tx_addr, req,
                        (ZHPEQ_MR_GET | ZHPEQ_MR_PUT |
@@ -337,8 +337,8 @@ static void random_rx_rcv(struct stuff *conn, struct rx_queue_head *rx_head)
     /* Set buf to equivalent slot in rx_data. */
     t = 0;
     STAILQ_FOREACH(tp, rx_head, list) {
-        tp->buf = ((char *)conn->rx_data +
-                   (tp - conn->rx_rcv) * args->ring_entry_len);
+        tp->buf = VPTR(conn->rx_data,
+                       (tp - conn->rx_rcv) * args->ring_entry_len);
         t++;
     }
     if (t != args->ring_entries) {
@@ -347,7 +347,7 @@ static void random_rx_rcv(struct stuff *conn, struct rx_queue_head *rx_head)
     }
 }
 
-static int zxq_write(struct zhpeq_xq *zxq, uint64_t lcl_zaddr,
+static int zxq_write(struct zhpeq_xq *zxq, const void *buf, uint64_t lcl_zaddr,
                      size_t len, uint64_t rem_zaddr)
 {
     int32_t             ret;
@@ -357,7 +357,10 @@ static int zxq_write(struct zhpeq_xq *zxq, uint64_t lcl_zaddr,
         print_func_err(__func__, __LINE__, "zhpeq_xq_reserve", "", ret);
         goto done;
     }
-    zhpeq_xq_put(zxq, ret, false, lcl_zaddr, len, rem_zaddr);
+    if (len <= ZHPEQ_IMM_MAX)
+        zhpeq_xq_puti(zxq, ret, false, buf, len, rem_zaddr);
+    else
+        zhpeq_xq_put(zxq, ret, false, lcl_zaddr, len, rem_zaddr);
     zhpeq_xq_insert(zxq, ret);
     zhpeq_xq_commit(zxq);
  done:
@@ -415,8 +418,8 @@ static int do_server_pong(struct stuff *conn)
         /* Receive packets up to window or first miss. */
         for (window = RX_WINDOW; window > 0 && tx_flag_in != TX_LAST;
              window--, rx_count++, rx_off = next_roff(conn, rx_off)) {
-            tx_addr = (void *)((char *)conn->tx_addr + rx_off);
-            rx_addr = (void *)((char *)conn->rx_addr + rx_off);
+            tx_addr = VPTR(conn->tx_addr, rx_off);
+            rx_addr = VPTR(conn->rx_addr, rx_off);
             if (!(tx_flag_new = *rx_addr))
                 break;
             if (tx_flag_new != tx_flag_in) {
@@ -455,10 +458,11 @@ static int do_server_pong(struct stuff *conn)
              (window--, tx_count++, tx_avail--,
               tx_off = next_roff(conn, tx_off))) {
             /* Reflect buffer to same offset in client.*/
+            tx_addr = VPTR(conn->tx_addr, tx_off);
             zxq_tx_addr = conn->zxq_local_tx_zaddr + tx_off;
             zxq_rx_addr = conn->zxq_remote_rx_zaddr + tx_off;
-            ret = zxq_write(conn->zxq, zxq_tx_addr, args->ring_entry_len,
-                           zxq_rx_addr);
+            ret = zxq_write(conn->zxq, tx_addr, zxq_tx_addr,
+                            args->ring_entry_len, zxq_rx_addr);
             if (ret < 0)
                 goto done;
         }
@@ -518,7 +522,7 @@ static int do_client_pong(struct stuff *conn)
         for (window = RX_WINDOW; window > 0 && tx_flag_in != TX_LAST;
              (window--, rx_count++, ring_avail++,
               rx_off = next_roff(conn, rx_off))) {
-            rx_addr = (void *)((char *)conn->rx_addr + rx_off);
+            rx_addr = VPTR(conn->rx_addr, rx_off);
             if (!(tx_flag_in = *rx_addr))
                 break;
             *rx_addr = 0;
@@ -595,7 +599,7 @@ static int do_client_pong(struct stuff *conn)
             }
 
             /* Write buffer to same offset in server.*/
-            tx_addr = (void *)((char *)conn->tx_addr + tx_off);
+            tx_addr = VPTR(conn->tx_addr, tx_off);
             zxq_tx_addr = conn->zxq_local_tx_zaddr + tx_off;
             zxq_rx_addr = conn->zxq_remote_rx_zaddr + tx_off;
             if (!tx_off)
@@ -605,8 +609,8 @@ static int do_client_pong(struct stuff *conn)
             /* Send data. */
             now = get_cycles(NULL);
             conn->ring_timestamps[tx_idx++] = now;
-            ret = zxq_write(conn->zxq, zxq_tx_addr, args->ring_entry_len,
-                           zxq_rx_addr);
+            ret = zxq_write(conn->zxq, tx_addr, zxq_tx_addr,
+                            args->ring_entry_len, zxq_rx_addr);
             lat_write += get_cycles(NULL) - now;
             if (ret < 0)
                 goto done;
@@ -733,12 +737,12 @@ static int do_client_unidir(struct stuff *conn)
         }
 
         /* Write buffer to same offset in server.*/
-        tx_addr = (void *)((char *)conn->tx_addr + tx_off);
+        tx_addr = VPTR(conn->tx_addr, tx_off);
         zxq_tx_addr = conn->zxq_local_tx_zaddr + tx_off;
         zxq_rx_addr = conn->zxq_remote_rx_zaddr + tx_off;
         /* Write op flag. */
         *tx_addr = tx_flag_out;
-        ret = zxq_write(conn->zxq, zxq_tx_addr, args->ring_entry_len,
+        ret = zxq_write(conn->zxq, tx_addr, zxq_tx_addr, args->ring_entry_len,
                        zxq_rx_addr);
         now = get_cycles(NULL);
         lat_write += get_cycles(NULL) - now;

@@ -446,7 +446,7 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
         ret = -errno;
         goto done;
     }
-    xqi->pub.cmd = VOID_OFF(xqi->pub.qcm, ZHPE_XDM_QCM_CMD_BUF_OFFSET);
+    xqi->pub.cmd = VPTR(xqi->pub.qcm, ZHPE_XDM_QCM_CMD_BUF_OFFSET);
 
     xqi->pub.wq = _zhpeu_mmap(NULL, xqi->pub.xqinfo.cmdq.size,
                               PROT_READ | PROT_WRITE, flags, xqi->fd,
