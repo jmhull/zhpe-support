@@ -577,7 +577,6 @@ void zhpeq_xq_commit(struct zhpeq_xq *zxq)
     if (unlikely(zxq->wq_tail != zxq->wq_tail_commit)) {
         qmask = zxq->xqinfo.cmdq.ent - 1;
         zxq->wq_tail_commit = zxq->wq_tail;
-        io_wmb();
         qcmwrite64(zxq->wq_tail_commit & qmask,
                    zxq->qcm, ZHPE_XDM_QCM_CMD_QUEUE_TAIL_OFFSET);
     }
