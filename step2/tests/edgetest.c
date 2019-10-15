@@ -227,7 +227,7 @@ static inline int zxq_completions(struct zhpeq_xq *zxq)
     }
     for (i = ret; i > 0;) {
         i--;
-        if (zxq_comp[i].z.status != ZHPEQ_CQ_STATUS_SUCCESS) {
+        if (zxq_comp[i].z.status != ZHPEQ_XQ_CQ_STATUS_SUCCESS) {
             print_err("%s,%u:index 0x%x status 0x%x\n", __func__, __LINE__,
                       zxq_comp[i].z.index, zxq_comp[i].z.status);
             break;
@@ -278,6 +278,7 @@ static int zxq_op(struct zhpeq_xq *zxq, bool read, void *lcl_buf,
         zhpeq_xq_puti(zxq, ret, false, lcl_buf, len, rem_zaddr);
     else
         zhpeq_xq_put(zxq, ret, false, lcl_zaddr, len, rem_zaddr);
+    zhpeq_xq_insert(zxq, ret);
     zhpeq_xq_commit(zxq);
     while (!(ret = zxq_completions(zxq)));
     if (ret > 0 && !expected_saw("completions", 1, ret))

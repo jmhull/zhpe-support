@@ -295,7 +295,7 @@ static inline int zxq_completions(struct zhpeq_xq *zxq)
         goto done;
     }
     for (i = 0; i < ret; i++) {
-        if (zxq_comp[i].z.status != ZHPEQ_CQ_STATUS_SUCCESS) {
+        if (zxq_comp[i].z.status != ZHPEQ_XQ_CQ_STATUS_SUCCESS) {
             print_err("%s,%u:index 0x%x status 0x%x\n", __func__, __LINE__,
                       zxq_comp[i].z.index, zxq_comp[i].z.status);
             ret = -EIO;
