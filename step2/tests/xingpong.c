@@ -831,6 +831,13 @@ static int do_server_one(const struct args *oargs, int conn_fd)
         ret = do_server_sink(&conn);
     else
         ret = do_server_pong(&conn);
+    /* Completion handshake. */
+    ret = sock_recv_fixed_blob(conn.sock_fd, NULL, 0);
+    if (ret < 0)
+        goto done;
+    ret = sock_send_blob(conn.sock_fd, NULL, 0);
+    if (ret < 0)
+        goto done;
 
  done:
     stuff_free(&conn);
@@ -956,6 +963,13 @@ static int do_client(const struct args *args)
         ret = do_client_unidir(&conn);
     else
         ret = do_client_pong(&conn);
+    /* Completion handshake. */
+    ret = sock_send_blob(conn.sock_fd, NULL, 0);
+    if (ret < 0)
+        goto done;
+    ret = sock_recv_fixed_blob(conn.sock_fd, NULL, 0);
+    if (ret < 0)
+        goto done;
 
  done:
     stuff_free(&conn);
