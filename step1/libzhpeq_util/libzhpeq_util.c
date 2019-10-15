@@ -1296,7 +1296,7 @@ char *zhpeu_sockaddr_str(const void *addr)
         break;
 
     default:
-        break;
+        abort();
     }
 
     ret = zhpeu_asprintf("%s:%s:%d", family, ntop, port);
