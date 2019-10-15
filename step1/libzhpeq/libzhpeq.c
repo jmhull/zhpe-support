@@ -477,15 +477,15 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
     return ret;
 }
 
-int zhpeq_xchg_addr(struct zhpeq_xq *zxq, int sock_fd,
-                    void *sa, size_t *sa_len)
+int zhpeq_xq_xchg_addr(struct zhpeq_xq *zxq, int sock_fd,
+                       void *sa, size_t *sa_len)
 {
     int                 ret = -EINVAL;
 
     if (!zxq || sock_fd == -1 || !sa || !sa_len)
         goto done;
 
-    ret = zhpeq_get_addr(zxq, sa, sa_len);
+    ret = zhpeq_xq_get_addr(zxq, sa, sa_len);
     if (ret < 0)
         goto done;
     ret = zhpeu_sock_send_blob(sock_fd, sa, *sa_len);
@@ -868,8 +868,8 @@ int zhpeq_mmap_commit(struct zhpeq_mmap_desc *zmdesc,
     return ret;
 }
 
-ssize_t zhpeq_xq_cq_read(struct zhpeq_xq *zxq, struct zhpeq_cq_entry *entries,
-                         size_t n_entries)
+ssize_t zhpeq_xq_cq_read(struct zhpeq_xq *zxq,
+                         struct zhpeq_xq_cq_entry *entries, size_t n_entries)
 {
     ssize_t             ret = -EINVAL;
     struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, pub);
@@ -891,10 +891,6 @@ ssize_t zhpeq_xq_cq_read(struct zhpeq_xq *zxq, struct zhpeq_cq_entry *entries,
         entries[i].z.context = get_context(xqi, &entries[i].z);
         zhpe_stats_stamp(zhpe_stats_subid(ZHPQ, 80), (uintptr_t)zxq,
                          entries[i].z.index, (uintptr_t)entries[i].z.context);
-        if (entries[i].z.status != ZHPEQ_CQ_STATUS_SUCCESS)
-            zhpeu_print_err("%s,%u:head 0x%x index 0x%x status 0x%x\n",
-                            __func__, __LINE__, xqi->pub.cq_head,
-                            entries[i].z.index, entries[i].z.status);
         xqi->pub.cq_head++;
     }
     ret = i;
@@ -903,7 +899,7 @@ ssize_t zhpeq_xq_cq_read(struct zhpeq_xq *zxq, struct zhpeq_cq_entry *entries,
     return ret;
 }
 
-void zhpeq_print_info(struct zhpeq_xq *zxq)
+void zhpeq_print_xq_info(struct zhpeq_xq *zxq)
 {
     const char          *b_str = "unknown";
     struct zhpe_attr    *attr = &b_attr.z;
@@ -932,10 +928,10 @@ void zhpeq_print_info(struct zhpeq_xq *zxq)
     printf("max_dma_len   : %Lu\n", (ullong)attr->max_dma_len);
 
     printf("\n");
-    zhpe_print_info(xqi);
+    zhpe_print_xq_info(xqi);
 }
 
-int zhpeq_get_addr(struct zhpeq_xq *zxq, void *sa, size_t *sa_len)
+int zhpeq_xq_get_addr(struct zhpeq_xq *zxq, void *sa, size_t *sa_len)
 {
     ssize_t             ret = -EINVAL;
     struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, pub);
@@ -943,7 +939,7 @@ int zhpeq_get_addr(struct zhpeq_xq *zxq, void *sa, size_t *sa_len)
     if (!zxq || !sa || !sa_len)
         goto done;
 
-    ret = zhpe_get_addr(xqi, sa, sa_len);
+    ret = zhpe_xq_get_addr(xqi, sa, sa_len);
  done:
 
     return ret;
@@ -1069,7 +1065,7 @@ static void print_qcm1(const char *func, uint line, const volatile void *qcm,
            func, line, offset, qcmread64(qcm, offset));
 }
 
-void zhpeq_print_qcm(const char *func, uint line, const struct zhpeq_xq *zxq)
+void zhpeq_print_xq_qcm(const char *func, uint line, const struct zhpeq_xq *zxq)
 {
     uint                i;
 
@@ -1092,7 +1088,7 @@ static uint wq_fence(union zhpe_hw_wq_entry *wqe)
 
 static uint wq_index(union zhpe_hw_wq_entry *wqe)
 {
-    return le16toh(wqe->hdr.cmp_index);
+    return wqe->hdr.cmp_index;
 }
 
 static void wq_print_imm(union zhpe_hw_wq_entry *wqe, uint i, const char *opstr)
@@ -1101,7 +1097,7 @@ static void wq_print_imm(union zhpe_hw_wq_entry *wqe, uint i, const char *opstr)
 
     fprintf(stderr, "%7d:%-7s:f %u idx 0x%04x len 0x%x rem 0x%lx\n",
             i, opstr, wq_fence(wqe), wq_index(wqe),
-            imm->len, le64toh(imm->rem_addr));
+            imm->len, imm->rem_addr);
 }
 
 static void wq_print_dma(union zhpe_hw_wq_entry *wqe, uint i, const char *opstr)
@@ -1131,7 +1127,7 @@ static void wq_print_atm(union zhpe_hw_wq_entry *wqe, uint i, const char *opstr)
             atm->size, atm->rem_addr, operands[0], operands[1]);
 }
 
-void zhpeq_print_wq(struct zhpeq_xq *zxq, int offset, int cnt)
+void zhpeq_print_xq_wq(struct zhpeq_xq *zxq, int offset, int cnt)
 {
     uint32_t            qmask = zxq->xqinfo.cmdq.ent - 1;
     uint                i;
@@ -1185,7 +1181,7 @@ void zhpeq_print_wq(struct zhpeq_xq *zxq, int offset, int cnt)
     }
 }
 
-void zhpeq_print_cq(struct zhpeq_xq *zxq, int offset, int cnt)
+void zhpeq_print_xq_cq(struct zhpeq_xq *zxq, int offset, int cnt)
 {
     uint32_t            qmask = zxq->xqinfo.cmplq.ent - 1;
     uint                i;

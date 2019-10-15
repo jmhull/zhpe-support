@@ -91,8 +91,8 @@ struct backend_ops {
     int                 (*mmap_commit)(struct zhpeq_mmap_desc *zmdesc,
                                        const void *addr, size_t length,
                                        bool fence, bool invalidate, bool wait);
-    void                (*print_info)(struct zhpeq_xq *zxq);
-    int                 (*get_addr)(struct zhpeq_xq *zxq, void *sa,
+    void                (*print_xq_info)(struct zhpeq_xq *zxq);
+    int                 (*xq_get_addr)(struct zhpeq_xq *zxq, void *sa,
                                     size_t *sa_len);
     char                *(*qkdata_id_str)(const struct zhpeq_key_data *qkdata);
 };

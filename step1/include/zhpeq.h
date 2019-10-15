@@ -130,7 +130,7 @@ struct zhpeq_key_data {
     };
 };
 
-struct zhpeq_cq_entry {
+struct zhpeq_xq_cq_entry {
     struct zhpe_cq_entry z;
 };
 
@@ -222,8 +222,8 @@ int zhpeq_xq_backend_open(struct zhpeq_xq *zxq, void *sa);
 
 int zhpeq_xq_backend_close(struct zhpeq_xq *zxq, int open_idx);
 
-ssize_t zhpeq_xq_cq_read(struct zhpeq_xq *zxq, struct zhpeq_cq_entry *entries,
-                         size_t n_entries);
+ssize_t zhpeq_xq_cq_read(struct zhpeq_xq *zxq,
+                         struct zhpeq_xq_cq_entry *entries, size_t n_entries);
 
 int zhpeq_mr_reg(struct zhpeq_dom *zdom, const void *buf, size_t len,
                  uint32_t access, struct zhpeq_key_data **qkdata_out);
@@ -366,23 +366,22 @@ void zhpeq_atomic(struct zhpeq_xq *zxq, int32_t reservation, uint16_t fence,
                   enum zhpeq_atomic_size datasize, enum zhpeq_atomic_op op,
                   uint64_t rem_addr, const uint64_t *operands);
 
-void zhpeq_print_info(struct zhpeq_xq *zxq);
-
-struct zhpeq_dom *zhpeq_dom(struct zhpeq_xq *zxq);
+void zhpeq_print_xq_info(struct zhpeq_xq *zxq);
 
 void zhpeq_print_qkdata(const char *func, uint line,
                         const struct zhpeq_key_data *qkdata);
 
-void zhpeq_print_qcm(const char *func, uint line, const struct zhpeq_xq *zxq);
+void zhpeq_print_xq_qcm(const char *func, uint line,
+                        const struct zhpeq_xq *zxq);
 
-void zhpeq_print_wq(struct zhpeq_xq *zxq, int offset, int cnt);
+void zhpeq_print_xq_wq(struct zhpeq_xq *zxq, int offset, int cnt);
 
-void zhpeq_print_cq(struct zhpeq_xq *zxq, int offset, int cnt);
+void zhpeq_print_xq_cq(struct zhpeq_xq *zxq, int offset, int cnt);
 
-int zhpeq_get_addr(struct zhpeq_xq *zxq, void *sa, size_t *sa_len);
+int zhpeq_xq_get_addr(struct zhpeq_xq *zxq, void *sa, size_t *sa_len);
 
-int zhpeq_xchg_addr(struct zhpeq_xq *zxq, int sock_fd,
-                    void *sa, size_t *sa_len);
+int zhpeq_xq_xchg_addr(struct zhpeq_xq *zxq, int sock_fd,
+                       void *sa, size_t *sa_len);
 
 _EXTERN_C_END
 

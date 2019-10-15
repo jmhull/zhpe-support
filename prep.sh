@@ -82,6 +82,7 @@ fi
     (
 	D=step1
 	ln -sfT $DRVR $APPDIR/$D/asic
+	ln -sfT ../step2/tests $APPDIR/$D/tests
 	mkdir $D
 	cd $D
 	cmake \

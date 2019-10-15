@@ -923,12 +923,12 @@ static int zhpe_qkdata_export(const struct zhpeq_key_data *qkdata,
     return 0;
 }
 
-static void zhpe_print_info(struct zhpeq_xqi *xqi)
+static void zhpe_print_xq_info(struct zhpeq_xqi *xqi)
 {
     zhpeu_print_info("GenZ ASIC backend\n");
 }
 
-static int zhpe_get_addr(struct zhpeq_xqi *xqi, void *sa, size_t *sa_len)
+static int zhpe_xq_get_addr(struct zhpeq_xqi *xqi, void *sa, size_t *sa_len)
 {
     int                 ret = -EOVERFLOW;
     struct sockaddr_zhpe *sz = sa;
@@ -985,8 +985,8 @@ struct backend_ops ops = {
     .mmap               = zhpe_mmap,
     .mmap_unmap         = zhpe_mmap_unmap,
     .mmap_commit        = zhpe_mmap_commit,
-    .print_info         = zhpe_print_info,
-    .get)addr           = zhpe_get_addr,
+    .print_xq_info      = zhpe_print_xq_info,
+    .xq_get_addr        = zhpe_xq_get_addr,
     .qkdata_id_str      = zhpe_qkdata_id_str,
 };
 
