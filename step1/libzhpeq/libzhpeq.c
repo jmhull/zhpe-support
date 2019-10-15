@@ -46,6 +46,7 @@ static_assert(sizeof(union zhpe_hw_wq_entry) ==  ZHPE_ENTRY_LEN,
               "zhpe_hw_wq_entry");
 static_assert(sizeof(union zhpe_hw_cq_entry) ==  ZHPE_ENTRY_LEN,
               "zhpe_hw_cq_entry");
+static_assert(__BYTE_ORDER == __LITTLE_ENDIAN, "Only little endian supported");
 
 /* Set to 1 to dump qkdata when registered/exported/imported/freed. */
 #define QKDATA_DUMP     (0)
@@ -78,10 +79,8 @@ static void cmd_insert64(struct zhpeq_xq *zxq, uint16_t reservation16)
     size_t              i;
 
     for (i = 1; i < ARRAY_SIZE(dst->bytes8); i++)
-        *(volatile uint64_t *)&dst->bytes8[i] = src->bytes8[i];
-    io_wmb();
-    /* Should io_wmb() be a nop on x86? */
-    *(volatile uint64_t *)&dst->bytes8[0] = src->bytes8[0];
+        iowrite64(src->bytes8[i], &dst->bytes8[i]);
+    iowrite64(src->bytes8[0], &dst->bytes8[0]);
 }
 
 static void mem_insert64(struct zhpeq_xq *zxq, uint16_t reservation16)
@@ -98,15 +97,14 @@ static void cmd_insert128(struct zhpeq_xq *zxq, uint16_t reservation16)
     union zhpe_hw_wq_entry *dst = &zxq->cmd[reservation16];
 
     asm volatile (
-        "vmovdqa    (%0),  %%xmm0\n"
-        "vmovdqa  16(%0),  %%xmm1\n"
-        "vmovdqa  32(%0),  %%xmm2\n"
-        "vmovdqa  48(%0),  %%xmm3\n"
-        "vmovdqa  %%xmm1,  16(%1)\n"
-        "vmovdqa  %%xmm2,  32(%1)\n"
-        "vmovdqa  %%xmm3,  48(%1)\n"
-        "sfence\n"
-        "vmovdqa  %%xmm0,    (%1)\n"
+        "vmovdqa    (%0), %%xmm0\n"
+        "vmovdqa  16(%0), %%xmm1\n"
+        "vmovdqa  32(%0), %%xmm2\n"
+        "vmovdqa  48(%0), %%xmm3\n"
+        "vmovdqa  %%xmm1, 16(%1)\n"
+        "vmovdqa  %%xmm2, 32(%1)\n"
+        "vmovdqa  %%xmm3, 48(%1)\n"
+        "vmovdqa  %%xmm0,   (%1)\n"
         : : "r" (dst), "r" (src) : "%xmm0", "%xmm1", "%xmm2", "%xmm3");
 }
 
@@ -115,11 +113,12 @@ static void cmd_insert256(struct zhpeq_xq *zxq, uint16_t reservation16)
     union zhpe_hw_wq_entry *src = &zxq->mem[reservation16];
     union zhpe_hw_wq_entry *dst = &zxq->cmd[reservation16];
 
-    asm volatile("vmovdqa %0, %%ymm0" : : "m" (src->bytes32[0]));
-    asm volatile("vmovdqa %0, %%ymm1" : : "m" (src->bytes32[1]));
-    asm volatile("vmovdqa %%ymm1, %0" : "=m" (dst->bytes32[1]));
-    io_wmb();
-    asm volatile("vmovdqa %%ymm0, %0" : "=m" (dst->bytes32[0]));
+    asm volatile (
+        "vmovdqa    (%0), %%ymm0\n"
+        "vmovdqa  32(%0), %%ymm1\n"
+        "vmovdqa  %%ymm1, 32(%1)\n"
+        "vmovdqa  %%ymm0,   (%1)\n"
+        : : "r" (dst), "r" (src) : "%ymm0", "%ymm1");
 }
 
 static void mem_insert256(struct zhpeq_xq *zxq, uint16_t reservation16)
@@ -127,10 +126,12 @@ static void mem_insert256(struct zhpeq_xq *zxq, uint16_t reservation16)
     union zhpe_hw_wq_entry *src = &zxq->mem[reservation16];
     union zhpe_hw_wq_entry *dst = xq_get_wq(zxq);
 
-    asm volatile("vmovdqa %0, %%ymm0" : : "m" (src->bytes32[0]));
-    asm volatile("vmovdqa %0, %%ymm1" : : "m" (src->bytes32[1]));
-    asm volatile("vmovntdq %%ymm0, %0" : "=m" (dst->bytes32[0]));
-    asm volatile("vmovntdq %%ymm1, %0" : "=m" (dst->bytes32[1]));
+    asm volatile (
+        "vmovdqa    (%0), %%ymm0\n"
+        "vmovdqa  32(%0), %%ymm1\n"
+        "vmovntdq %%ymm1, 32(%1)\n"
+        "vmovntdq %%ymm0,   (%1)\n"
+        : : "r" (dst), "r" (src) : "%ymm0", "%ymm1");
 }
 
 static void do_mcommit(void)
@@ -413,7 +414,7 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
     if (!xqi->pub.mem)
         goto done;
     for (i = 0; i < e; i++)
-        xqi->pub.mem[i].hdr.cmp_index = htole16(i);
+        xqi->pub.mem[i].hdr.cmp_index = i;
     e = (e >> ZHPEQ_BITMAP_SHIFT) + 1;
     xqi->free_bitmap = calloc_cachealigned(e, sizeof(*xqi->free_bitmap));
     if (!xqi->free_bitmap)
@@ -611,22 +612,22 @@ void zhpeq_atomic(struct zhpeq_xq *zxq, int32_t reservation, uint16_t fence,
 {
     union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
 
-    wqe->atm.rem_addr = htole64(rem_addr);
+    wqe->atm.rem_addr = rem_addr;
 
     switch (op) {
 
     case ZHPEQ_ATOMIC_ADD:
-        wqe->hdr.opcode = htole16(ZHPE_HW_OPCODE_ATM_ADD | fence);
+        wqe->hdr.opcode = ZHPE_HW_OPCODE_ATM_ADD | fence;
         set_atomic_operands(wqe, datasize, operands[0], 0);
         break;
 
     case ZHPEQ_ATOMIC_CAS:
-        wqe->hdr.opcode = htole16(ZHPE_HW_OPCODE_ATM_CAS | fence);
+        wqe->hdr.opcode = ZHPE_HW_OPCODE_ATM_CAS | fence;
         set_atomic_operands(wqe, datasize, operands[1], operands[0]);
         break;
 
     case ZHPEQ_ATOMIC_SWAP:
-        wqe->hdr.opcode = htole16(ZHPE_HW_OPCODE_ATM_SWAP | fence);
+        wqe->hdr.opcode = ZHPE_HW_OPCODE_ATM_SWAP | fence;
         set_atomic_operands(wqe, datasize, operands[0], 0);
         break;
 
@@ -1081,12 +1082,12 @@ void zhpeq_print_qcm(const char *func, uint line, const struct zhpeq_xq *zxq)
 
 static uint wq_opcode(union zhpe_hw_wq_entry *wqe)
 {
-    return le16toh(wqe->hdr.opcode & ZHPE_HW_OPCODE_MASK);
+    return (wqe->hdr.opcode & ZHPE_HW_OPCODE_MASK);
 }
 
 static uint wq_fence(union zhpe_hw_wq_entry *wqe)
 {
-    return !!(le16toh(wqe->hdr.opcode & ZHPE_HW_OPCODE_FENCE));
+    return !!(wqe->hdr.opcode & ZHPE_HW_OPCODE_FENCE);
 }
 
 static uint wq_index(union zhpe_hw_wq_entry *wqe)
@@ -1109,7 +1110,7 @@ static void wq_print_dma(union zhpe_hw_wq_entry *wqe, uint i, const char *opstr)
 
     fprintf(stderr, "%7d:%-7s:f %u idx 0x%04x len 0x%x rd 0x%lx wr 0x%lx\n",
             i, opstr, wq_fence(wqe), wq_index(wqe),
-            le32toh(dma->len), le64toh(dma->rd_addr), le64toh(dma->wr_addr));
+            dma->len, dma->rd_addr, dma->wr_addr);
 }
 
 static void wq_print_atm(union zhpe_hw_wq_entry *wqe, uint i, const char *opstr)
@@ -1118,16 +1119,16 @@ static void wq_print_atm(union zhpe_hw_wq_entry *wqe, uint i, const char *opstr)
     uint64_t            operands[2];
 
     if ((atm->size & ZHPE_HW_ATOMIC_SIZE_MASK) == ZHPE_HW_ATOMIC_SIZE_32) {
-        operands[0] = le32toh(atm->operands32[0]);
-        operands[1] = le32toh(atm->operands32[1]);
+        operands[0] = atm->operands32[0];
+        operands[1] = atm->operands32[1];
     } else {
-        operands[0] = le64toh(atm->operands64[0]);
-        operands[1] = le64toh(atm->operands64[1]);
+        operands[0] = atm->operands64[0];
+        operands[1] = atm->operands64[1];
     }
     fprintf(stderr, "%7d:%-7s:f %u idx 0x%04x size 0x%x rem 0x%lx"
             " operands 0x%lx 0x%lx\n",
             i, opstr, wq_fence(wqe), wq_index(wqe),
-            atm->size, le64toh(atm->rem_addr), operands[0], operands[1]);
+            atm->size, atm->rem_addr, operands[0], operands[1]);
 }
 
 void zhpeq_print_wq(struct zhpeq_xq *zxq, int offset, int cnt)
@@ -1200,8 +1201,7 @@ void zhpeq_print_cq(struct zhpeq_xq *zxq, int offset, int cnt)
         d = cqe->entry.result.data;
         fprintf(stderr, "%7d:v %u idx 0x%04x status 0x%02x"
                 " data %02x%02x%x02%02x%02x%02x%02x%02x\n",
-                i, cqe->entry.valid, le16toh(cqe->entry.index),
-                cqe->entry.status,
+                i, cqe->entry.valid, cqe->entry.index, cqe->entry.status,
                 d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
     }
 }

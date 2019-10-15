@@ -289,14 +289,14 @@ static inline void zhpeq_xq_nop(struct zhpeq_xq *zxq, int32_t reservation,
 {
     union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
 
-    wqe->hdr.opcode = htole16(ZHPE_HW_OPCODE_NOP | fence);
+    wqe->hdr.opcode = ZHPE_HW_OPCODE_NOP | fence;
 }
 
 static inline void zhpeq_xq_sync(struct zhpeq_xq *zxq, int32_t reservation)
 {
     union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
 
-    wqe->hdr.opcode = htole16(ZHPE_HW_OPCODE_SYNC | ZHPE_HW_OPCODE_FENCE);
+    wqe->hdr.opcode = ZHPE_HW_OPCODE_SYNC | ZHPE_HW_OPCODE_FENCE;
 }
 
 static inline void zhpeq_xq_rw(struct zhpeq_xq *zxq, int32_t reservation,
@@ -305,10 +305,10 @@ static inline void zhpeq_xq_rw(struct zhpeq_xq *zxq, int32_t reservation,
 {
     union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
 
-    wqe->hdr.opcode = htole16(opcode);
-    wqe->dma.len = htole64(len);
-    wqe->dma.rd_addr = htole64(rd_addr);
-    wqe->dma.wr_addr = htole64(wr_addr);
+    wqe->hdr.opcode = opcode;
+    wqe->dma.len = len;
+    wqe->dma.rd_addr = rd_addr;
+    wqe->dma.wr_addr = wr_addr;
 }
 
 static inline void zhpeq_xq_put(struct zhpeq_xq *zxq, int32_t reservation,
@@ -325,9 +325,9 @@ static inline void zhpeq_xq_puti(struct zhpeq_xq *zxq, int32_t reservation,
 {
     union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
 
-    wqe->hdr.opcode = htole16(ZHPE_HW_OPCODE_PUTIMM | fence);
-    wqe->imm.len = htole32(len);
-    wqe->imm.rem_addr = htole64(rem_addr);
+    wqe->hdr.opcode = ZHPE_HW_OPCODE_PUTIMM | fence;
+    wqe->imm.len = len;
+    wqe->imm.rem_addr = rem_addr;
     memcpy(wqe->imm.data, buf, len);
 }
 
@@ -344,9 +344,9 @@ static inline void zhpeq_xq_geti(struct zhpeq_xq *zxq, int32_t reservation,
 {
     union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
 
-    wqe->hdr.opcode = htole16(ZHPE_HW_OPCODE_GETIMM | fence);
-    wqe->imm.len = htole32(len);
-    wqe->imm.rem_addr = htole64(rem_addr);
+    wqe->hdr.opcode = ZHPE_HW_OPCODE_GETIMM | fence;
+    wqe->imm.len = len;
+    wqe->imm.rem_addr = rem_addr;
 }
 
 static inline void *zhpeq_xq_enqa(struct zhpeq_xq *zxq, int32_t reservation,
@@ -355,7 +355,7 @@ static inline void *zhpeq_xq_enqa(struct zhpeq_xq *zxq, int32_t reservation,
 {
     union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
 
-    wqe->hdr.opcode = htole16(ZHPE_HW_OPCODE_ENQA | fence);
+    wqe->hdr.opcode = ZHPE_HW_OPCODE_ENQA | fence;
     wqe->enqa_alt.dgcid = dgcid << ZHPE_ENQA_GCID_SHIFT;
     wqe->enqa_alt.rspctxid = rspctxid;
 
