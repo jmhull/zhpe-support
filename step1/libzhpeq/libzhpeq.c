@@ -131,7 +131,7 @@ static void mem_insert256(struct zhpeq_xq *zxq, uint16_t reservation16)
         "vmovdqa 32(%[s]), %%ymm1\n"
         "vmovntdq  %%ymm1, 32(%[d])\n"
         "vmovntdq  %%ymm0,   (%[d])\n"
-        : : [d] "r" (dst), [s] "r" (src) : "%ymm0", "%ymm1");
+        : "=m" (*dst) : [d] "r" (dst), [s] "r" (src) : "%ymm0", "%ymm1");
 }
 
 static void do_mcommit(void)
