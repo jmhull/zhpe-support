@@ -358,6 +358,7 @@ static int zxq_write(struct zhpeq_xq *zxq, uint64_t lcl_zaddr,
         goto done;
     }
     zhpeq_xq_put(zxq, ret, false, lcl_zaddr, len, rem_zaddr);
+    zhpeq_xq_insert(zxq, ret);
     zhpeq_xq_commit(zxq);
  done:
 
