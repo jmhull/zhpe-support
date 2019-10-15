@@ -92,23 +92,22 @@ static void mem_insert64(struct zhpeq_xq *zxq, uint16_t reservation16)
     memcpy(dst, src, sizeof(*dst));
 }
 
-#pragma GCC push_options
-#pragma GCC target("avx2")
-
 static void cmd_insert128(struct zhpeq_xq *zxq, uint16_t reservation16)
 {
     union zhpe_hw_wq_entry *src = &zxq->mem[reservation16];
     union zhpe_hw_wq_entry *dst = &zxq->cmd[reservation16];
 
-    asm volatile("vmovdqa %0, %%xmm0" : : "m" (src->bytes16[0]));
-    asm volatile("vmovdqa %0, %%xmm1" : : "m" (src->bytes16[1]));
-    asm volatile("vmovdqa %%xmm1, %0" : "=m" (dst->bytes16[1]));
-    asm volatile("vmovdqa %0, %%xmm2" : : "m" (src->bytes16[2]));
-    asm volatile("vmovdqa %%xmm2, %0" : "=m" (dst->bytes16[2]));
-    asm volatile("vmovdqa %0, %%xmm3" : : "m" (src->bytes16[3]));
-    asm volatile("vmovdqa %%xmm3, %0" : "=m" (dst->bytes16[3]));
-    io_wmb();
-    asm volatile("vmovdqa %%xmm0, %0" : "=m" (dst->bytes16[0]));
+    asm volatile (
+        "vmovdqa    (%0),  %%xmm0\n"
+        "vmovdqa  16(%0),  %%xmm1\n"
+        "vmovdqa  32(%0),  %%xmm2\n"
+        "vmovdqa  48(%0),  %%xmm3\n"
+        "vmovdqa  %%xmm1,  16(%1)\n"
+        "vmovdqa  %%xmm2,  32(%1)\n"
+        "vmovdqa  %%xmm3,  48(%1)\n"
+        "sfence\n"
+        "vmovdqa  %%xmm0,    (%1)\n"
+        : : "r" (dst), "r" (src) : "%xmm0", "%xmm1", "%xmm2", "%xmm3");
 }
 
 static void cmd_insert256(struct zhpeq_xq *zxq, uint16_t reservation16)
@@ -133,8 +132,6 @@ static void mem_insert256(struct zhpeq_xq *zxq, uint16_t reservation16)
     asm volatile("vmovntdq %%ymm0, %0" : "=m" (dst->bytes32[0]));
     asm volatile("vmovntdq %%ymm1, %0" : "=m" (dst->bytes32[1]));
 }
-
-#pragma GCC pop_options
 
 static void do_mcommit(void)
 {
