@@ -374,9 +374,9 @@ void zhpeq_print_qkdata(const char *func, uint line,
 void zhpeq_print_xq_qcm(const char *func, uint line,
                         const struct zhpeq_xq *zxq);
 
-void zhpeq_print_xq_wq(struct zhpeq_xq *zxq, int offset, int cnt);
+void zhpeq_print_xq_wq(struct zhpeq_xq *zxq, int cnt);
 
-void zhpeq_print_xq_cq(struct zhpeq_xq *zxq, int offset, int cnt);
+void zhpeq_print_xq_cq(struct zhpeq_xq *zxq, int cnt);
 
 int zhpeq_xq_get_addr(struct zhpeq_xq *zxq, void *sa, size_t *sa_len);
 

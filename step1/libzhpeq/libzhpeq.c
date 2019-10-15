@@ -1181,27 +1181,31 @@ static void wq_print(union zhpe_hw_wq_entry *wqe, uint i)
     }
 }
 
-void zhpeq_print_xq_wq(struct zhpeq_xq *zxq, int offset, int cnt)
+void zhpeq_print_xq_wq(struct zhpeq_xq *zxq, int cnt)
 {
     uint32_t            qmask = zxq->xqinfo.cmdq.ent - 1;
     uint                i;
 
-    if (offset < 0 && (uint)(-offset) > zxq->wq_tail)
-        offset = -(int)zxq->wq_tail;
-    for (i = zxq->wq_tail + offset; i < zxq->wq_tail && cnt > 0; i++, cnt--)
+    if (!cnt || cnt > qmask)
+        cnt = qmask;
+    if (cnt > zxq->wq_tail)
+        cnt = zxq->wq_tail;
+    for (i = zxq->wq_tail - cnt ; cnt > 0; i++, cnt--)
         wq_print(&zxq->wq[i & qmask], i);
 }
 
-void zhpeq_print_xq_cq(struct zhpeq_xq *zxq, int offset, int cnt)
+void zhpeq_print_xq_cq(struct zhpeq_xq *zxq, int cnt)
 {
     uint32_t            qmask = zxq->xqinfo.cmplq.ent - 1;
     uint                i;
     union zhpe_hw_cq_entry *cqe;
     char                *d;
 
-    if (offset < 0 && (uint)(-offset) > zxq->cq_head)
-        offset = -(int)zxq->cq_head;
-    for (i = zxq->cq_head + offset; i < zxq->cq_head && cnt > 0; i++, cnt--) {
+    if (!cnt || cnt > qmask)
+        cnt = qmask;
+    if (cnt > zxq->cq_head)
+        cnt = zxq->cq_head;
+    for (i = zxq->cq_head - cnt ; cnt > 0; i++, cnt--) {
         cqe = &zxq->cq[i & qmask];
         /* Print the first 8 bytes of the result */
         d = cqe->entry.result.data;
