@@ -1136,58 +1136,59 @@ static void wq_print_atm(union zhpe_hw_wq_entry *wqe, uint i, const char *opstr)
             atm->size, atm->rem_addr, operands[0], operands[1]);
 }
 
+static void wq_print(union zhpe_hw_wq_entry *wqe, uint i)
+{
+    switch (wq_opcode(wqe)) {
+
+    case ZHPE_HW_OPCODE_NOP:
+        fprintf(stderr, "%7d:%-7s:f %u idx 0x%04x\n",
+                i, "NOP", wq_fence(wqe), wq_index(wqe));
+        break;
+
+    case ZHPE_HW_OPCODE_GETIMM:
+        wq_print_imm(wqe, i, "GETIMM");
+        break;
+
+    case ZHPE_HW_OPCODE_PUTIMM:
+        wq_print_imm(wqe, i, "PUTIMM");
+        break;
+
+    case ZHPE_HW_OPCODE_GET:
+        wq_print_dma(wqe, i, "GET");
+        break;
+
+    case ZHPE_HW_OPCODE_PUT:
+        wq_print_dma(wqe, i, "PUT");
+        break;
+
+    case ZHPE_HW_OPCODE_ATM_ADD:
+        wq_print_atm(wqe, i, "ATMADD");
+        break;
+
+    case ZHPE_HW_OPCODE_ATM_CAS:
+        wq_print_atm(wqe, i, "ATMCAS");
+        break;
+
+    case ZHPE_HW_OPCODE_ATM_SWAP:
+        wq_print_atm(wqe, i, "ATMSWAP");
+        break;
+
+    default:
+        fprintf(stderr, "%7d:OP 0x%02x:f %u idx %0x04x\n",
+                i, wq_opcode(wqe), wq_fence(wqe), wq_index(wqe));
+        break;
+    }
+}
+
 void zhpeq_print_xq_wq(struct zhpeq_xq *zxq, int offset, int cnt)
 {
     uint32_t            qmask = zxq->xqinfo.cmdq.ent - 1;
     uint                i;
-    union zhpe_hw_wq_entry *wqe;
 
     if (offset < 0 && (uint)(-offset) > zxq->wq_tail)
         offset = -(int)zxq->wq_tail;
-    for (i = zxq->wq_tail + offset; i < zxq->wq_tail && cnt > 0;
-         i++, cnt--) {
-        wqe = &zxq->wq[i & qmask];
-        switch (wq_opcode(wqe)) {
-
-        case ZHPE_HW_OPCODE_NOP:
-            fprintf(stderr, "%7d:%-7s:f %u idx 0x%04x\n",
-                    i, "NOP", wq_fence(wqe), wq_index(wqe));
-            break;
-
-        case ZHPE_HW_OPCODE_GETIMM:
-            wq_print_imm(wqe, i, "GETIMM");
-            break;
-
-        case ZHPE_HW_OPCODE_PUTIMM:
-            wq_print_imm(wqe, i, "PUTIMM");
-            break;
-
-        case ZHPE_HW_OPCODE_GET:
-            wq_print_dma(wqe, i, "GET");
-            break;
-
-        case ZHPE_HW_OPCODE_PUT:
-            wq_print_dma(wqe, i, "PUT");
-            break;
-
-        case ZHPE_HW_OPCODE_ATM_ADD:
-            wq_print_atm(wqe, i, "ATMADD");
-            break;
-
-        case ZHPE_HW_OPCODE_ATM_CAS:
-            wq_print_atm(wqe, i, "ATMCAS");
-            break;
-
-        case ZHPE_HW_OPCODE_ATM_SWAP:
-            wq_print_atm(wqe, i, "ATMSWAP");
-            break;
-
-        default:
-            fprintf(stderr, "%7d:OP 0x%02x:f %u idx %0x04x\n",
-                    i, wq_opcode(wqe), wq_fence(wqe), wq_index(wqe));
-            break;
-        }
-    }
+    for (i = zxq->wq_tail + offset; i < zxq->wq_tail && cnt > 0; i++, cnt--)
+        wq_print(&zxq->wq[i & qmask], i);
 }
 
 void zhpeq_print_xq_cq(struct zhpeq_xq *zxq, int offset, int cnt)
@@ -1199,8 +1200,7 @@ void zhpeq_print_xq_cq(struct zhpeq_xq *zxq, int offset, int cnt)
 
     if (offset < 0 && (uint)(-offset) > zxq->cq_head)
         offset = -(int)zxq->cq_head;
-    for (i = zxq->cq_head + (int32_t)offset; i < zxq->cq_head && cnt > 0;
-         i++, cnt--) {
+    for (i = zxq->cq_head + offset; i < zxq->cq_head && cnt > 0; i++, cnt--) {
         cqe = &zxq->cq[i & qmask];
         /* Print the first 8 bytes of the result */
         d = cqe->entry.result.data;
