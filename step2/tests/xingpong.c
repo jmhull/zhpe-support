@@ -391,7 +391,6 @@ static int do_server_pong(struct stuff *conn)
     const struct args   *args = conn->args;
     uint                tx_flag_in = TX_NONE;
     size_t              tx_avail = conn->tx_avail;
-    size_t              tx_avail_shadow = 0;
     size_t              tx_off = 0;
     size_t              rx_off = 0;
     struct rx_queue_head rx_head = STAILQ_HEAD_INITIALIZER(rx_head);
@@ -440,19 +439,10 @@ static int do_server_pong(struct stuff *conn)
             }
             *(uint8_t *)rx_addr = 0;
         }
-        /*
-         * Fix possible issues with out-of-order completion by exhausting
-         * tx_avail and then waiting for all outstanding I/Os to complete.
-         */
-        ret = do_progress(conn->zxq, &tx_avail_shadow);
+        /* Move along, move along. */
+        ret = do_progress(conn->zxq, &tx_avail);
         if (ret < 0)
             goto done;
-        if (!tx_avail) {
-            if (tx_avail_shadow != conn->tx_avail)
-                continue;
-            tx_avail = tx_avail_shadow;
-            tx_avail_shadow = 0;
-        }
         /* Send all available buffers. */
         for (window = TX_WINDOW; window > 0 && rx_count != tx_count && tx_avail;
              (window--, tx_count++, tx_avail--,
@@ -467,7 +457,6 @@ static int do_server_pong(struct stuff *conn)
                 goto done;
         }
     }
-    tx_avail += tx_avail_shadow;
     while (tx_avail != conn->tx_avail) {
         ret = do_progress(conn->zxq, &tx_avail);
         if (ret < 0)
@@ -489,7 +478,6 @@ static int do_client_pong(struct stuff *conn)
     uint                tx_flag_in = TX_NONE;
     uint                tx_flag_out = TX_WARMUP;
     size_t              tx_avail = conn->tx_avail;
-    size_t              tx_avail_shadow = 0;
     size_t              ring_avail = args->ring_entries;
     size_t              tx_off = 0;
     size_t              rx_off = 0;
@@ -542,21 +530,12 @@ static int do_client_pong(struct stuff *conn)
             if (delta < lat_min2)
                 lat_min2 = delta;
         }
-        /*
-         * Fix possible issues with out-of-order completion by exhausting
-         * tx_avail and then waiting for all outstanding I/Os to complete.
-         */
+        /* Move along, move along. */
         now = get_cycles(NULL);
-        ret = do_progress(conn->zxq, &tx_avail_shadow);
+        ret = do_progress(conn->zxq, &tx_avail);
         lat_comp += get_cycles(NULL) - now;
         if (ret < 0)
             goto done;
-        if (!tx_avail) {
-            if (tx_avail_shadow != conn->tx_avail)
-                continue;
-            tx_avail = tx_avail_shadow;
-            tx_avail_shadow = 0;
-        }
         /* Send all available buffers. */
         for (window = TX_WINDOW;
              window > 0 && ring_avail > 0 && tx_flag_out != TX_LAST && tx_avail;
@@ -619,7 +598,6 @@ static int do_client_pong(struct stuff *conn)
         if (delta > q_max1)
             q_max1 = delta;
     }
-    tx_avail += tx_avail_shadow;
     while (tx_avail != conn->tx_avail) {
         now = get_cycles(NULL);
         ret = do_progress(conn->zxq, &tx_avail);
@@ -661,7 +639,6 @@ static int do_client_unidir(struct stuff *conn)
     const struct args   *args = conn->args;
     uint                tx_flag_out = TX_WARMUP;
     size_t              tx_avail = conn->tx_avail;
-    size_t              tx_avail_shadow = 0;
     size_t              tx_off = 0;
     uint64_t            lat_total1 = 0;
     uint64_t            lat_comp = 0;
@@ -680,26 +657,12 @@ static int do_client_unidir(struct stuff *conn)
     for (tx_count = warmup_count = 0; tx_flag_out != TX_LAST;
          tx_count++, tx_avail--, tx_off = next_roff(conn, tx_off)) {
 
-        /*
-         * Fix possible issues with out-of-order completion by exhausting
-         * tx_avail and then waiting for all outstanding I/Os to complete.
-         */
+        /* Move along, move along. */
         now = get_cycles(NULL);
-        ret = do_progress(conn->zxq, &tx_avail_shadow);
+        ret = do_progress(conn->zxq, &tx_avail);
         lat_comp += get_cycles(NULL) - now;
         if (ret < 0)
             goto done;
-        if (!tx_avail) {
-            while (tx_avail_shadow != conn->tx_avail) {
-                now = get_cycles(NULL);
-                ret = do_progress(conn->zxq, &tx_avail_shadow);
-                lat_comp += get_cycles(NULL) - now;
-                if (ret < 0)
-                    goto done;
-            }
-            tx_avail = tx_avail_shadow;
-            tx_avail_shadow = 0;
-        }
 
         /* Compute delta based on cycles/ops. */
         if (args->seconds_mode)
@@ -749,7 +712,6 @@ static int do_client_unidir(struct stuff *conn)
         if (ret < 0)
             goto done;
     }
-    tx_avail += tx_avail_shadow;
     while (tx_avail != conn->tx_avail) {
         now = get_cycles(NULL);
         ret = do_progress(conn->zxq, &tx_avail);
