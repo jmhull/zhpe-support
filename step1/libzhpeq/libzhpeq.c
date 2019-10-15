@@ -549,6 +549,7 @@ int32_t zhpeq_xq_reserve(struct zhpeq_xq *zxq, void *context)
     ret = ffs64(xqi->free_bitmap[0]);
     if (likely(ret)) {
         ret--;
+        xqi->free_bitmap[0] &= ~((uint64_t)1 << ret);
         /* INS_CMD == 0 */
         if (unlikely(ret >= ZHPE_XDM_QCM_CMD_BUF_COUNT))
             ret |= (INS_MEM << 16);
