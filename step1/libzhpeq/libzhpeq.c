@@ -97,15 +97,16 @@ static void cmd_insert128(struct zhpeq_xq *zxq, uint16_t reservation16)
     union zhpe_hw_wq_entry *dst = &zxq->cmd[reservation16];
 
     asm volatile (
-        "vmovdqa    (%0), %%xmm0\n"
-        "vmovdqa  16(%0), %%xmm1\n"
-        "vmovdqa  32(%0), %%xmm2\n"
-        "vmovdqa  48(%0), %%xmm3\n"
-        "vmovdqa  %%xmm1, 16(%1)\n"
-        "vmovdqa  %%xmm2, 32(%1)\n"
-        "vmovdqa  %%xmm3, 48(%1)\n"
-        "vmovdqa  %%xmm0,   (%1)\n"
-        : : "r" (dst), "r" (src) : "%xmm0", "%xmm1", "%xmm2", "%xmm3");
+        "vmovdqa   (%[s]), %%xmm0\n"
+        "vmovdqa 16(%[s]), %%xmm1\n"
+        "vmovdqa 32(%[s]), %%xmm2\n"
+        "vmovdqa 48(%[s]), %%xmm3\n"
+        "vmovdqa   %%xmm1, 16(%[d])\n"
+        "vmovdqa   %%xmm2, 32(%[d])\n"
+        "vmovdqa   %%xmm3, 48(%[d])\n"
+        "vmovdqa   %%xmm0,   (%[d])\n"
+        : "=m" (*dst): [s] "r" (src), [d] "r" (dst)
+        : "%xmm0", "%xmm1", "%xmm2", "%xmm3");
 }
 
 static void cmd_insert256(struct zhpeq_xq *zxq, uint16_t reservation16)
@@ -114,11 +115,11 @@ static void cmd_insert256(struct zhpeq_xq *zxq, uint16_t reservation16)
     union zhpe_hw_wq_entry *dst = &zxq->cmd[reservation16];
 
     asm volatile (
-        "vmovdqa    (%0), %%ymm0\n"
-        "vmovdqa  32(%0), %%ymm1\n"
-        "vmovdqa  %%ymm1, 32(%1)\n"
-        "vmovdqa  %%ymm0,   (%1)\n"
-        : : "r" (dst), "r" (src) : "%ymm0", "%ymm1");
+        "vmovdqa   (%[s]), %%ymm0\n"
+        "vmovdqa 32(%[s]), %%ymm1\n"
+        "vmovdqa   %%ymm1, 32(%[d])\n"
+        "vmovdqa   %%ymm0,   (%[d])\n"
+        : "=m" (*dst) : [s] "r" (src), [d] "r" (dst) : "%ymm0", "%ymm1");
 }
 
 static void mem_insert256(struct zhpeq_xq *zxq, uint16_t reservation16)
@@ -129,9 +130,9 @@ static void mem_insert256(struct zhpeq_xq *zxq, uint16_t reservation16)
     asm volatile (
         "vmovdqa   (%[s]), %%ymm0\n"
         "vmovdqa 32(%[s]), %%ymm1\n"
-        "vmovntdq  %%ymm1, 32(%[d])\n"
         "vmovntdq  %%ymm0,   (%[d])\n"
-        : "=m" (*dst) : [d] "r" (dst), [s] "r" (src) : "%ymm0", "%ymm1");
+        "vmovntdq  %%ymm1, 32(%[d])\n"
+        : "=m" (*dst) : [s] "r" (src), [d] "r" (dst) : "%ymm0", "%ymm1");
 }
 
 static void do_mcommit(void)
