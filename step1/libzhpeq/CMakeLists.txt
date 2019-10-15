@@ -1,3 +1,4 @@
+add_compile_options(-DZHPEQ_DIRECT)
 add_library(zhpeq SHARED libzhpeq.c)
 target_link_libraries(
   zhpeq PRIVATE zhpe_stats PUBLIC zhpe_stats zhpeq_util dl Threads::Threads)

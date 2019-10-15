@@ -130,6 +130,7 @@ _EXTERN_C_BEG
 #endif
 
 #define TO_PTR(_int)    (void *)(uintptr_t)(_int)
+#define VOID_OFF(_p, _o) (void *)((char *)(_p) + _o)
 
 #define FREE_IF(_ptr,_free)                                     \
 do {                                                            \
@@ -250,9 +251,18 @@ static inline int fls64(uint64_t v)
 {
     int                 ret = -1;
 
-    asm("bsrq %1,%q0" : "+r" (ret) : "r" (v));
+    asm("bsrq %1,%q0" : "+r" (ret) : "rm" (v));
 
-    return ret;
+    return ret + 1;
+}
+
+static inline int ffs64(uint64_t v)
+{
+    int                 ret = -1;
+
+    asm("bsfq %1,%q0" : "+r" (ret) : "rm" (v));
+
+    return ret + 1;
 }
 
 #endif
@@ -275,6 +285,8 @@ static inline int fls64(uint64_t v)
 
 #ifndef likely
 #define likely(_x)      __builtin_expect(!!(_x), 1)
+#endif
+#ifndef unlikely
 #define unlikely(_x)    __builtin_expect(!!(_x), 0)
 #endif
 
@@ -663,8 +675,8 @@ uint zhpeu_random_range(uint start, uint end);
 uint *zhpeu_random_array(uint *array, uint entries);
 
 int zhpeu_munmap(void *addr, size_t length);
-int zhpeu_mmap(void **addr, size_t length, int prot, int flags,
-               int fd, off_t offset);
+void *zhpeu_mmap(void *addr, size_t length, int prot, int flags,
+                 int fd, off_t offset);
 
 char *zhpeu_get_cpuinfo_val(FILE *fp, char *buf, size_t buf_size,
                             uint field, const char *name, ...);
@@ -879,7 +891,7 @@ static inline void *calloc_cachealigned(size_t nmemb, size_t size)
 #define _zhpeu_munmap(...)                                      \
     zhpeu_call_neg(zhpeu_dbg, zhpeu_munmap, int, __VA_ARGS__)
 #define _zhpeu_mmap(...)                                        \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_mmap, int, __VA_ARGS__)
+    zhpeu_call_null(zhpeu_dbg, zhpeu_mmap, void *, __VA_ARGS__)
 #define _zhpeu_get_cpuinfo_val(...)                             \
     zhpeu_call_null(zhpeu_dbg, zhpeu_get_cpuinfo_val, void *, __VA_ARGS__)
 
@@ -893,7 +905,7 @@ static inline uint64_t roundup_pow_of_2(uint64_t val)
     if (!val || !(val & (val - 1)))
         return val;
 
-    return ((uint64_t)1 << (fls64(val) + 1));
+    return ((uint64_t)1 << fls64(val));
 }
 
 static inline uint64_t mask2_off(uint64_t val, uint64_t size)

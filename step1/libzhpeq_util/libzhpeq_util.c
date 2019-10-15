@@ -1320,19 +1320,14 @@ int zhpeu_munmap(void *addr, size_t length)
     return ret;
 }
 
-int zhpeu_mmap(void **addr, size_t length, int prot, int flags,
-               int fd, off_t offset)
+void *zhpeu_mmap(void *addr, size_t length, int prot, int flags,
+                 int fd, off_t offset)
 {
-    int                 ret = 0;
-    void                *map_addr;
+    void                *ret;
 
-    map_addr = mmap(*addr, length, prot, flags, fd, offset);
-    if (map_addr == MAP_FAILED) {
-        map_addr = NULL;
-        ret = -errno;
-        zhpeu_print_func_err(__func__, __LINE__, "mmap", "", ret);
-    }
-    *addr = map_addr;
+    ret = mmap(addr, length, prot, flags, fd, offset);
+    if (ret == MAP_FAILED)
+        ret = NULL;
 
     return ret;
 }
