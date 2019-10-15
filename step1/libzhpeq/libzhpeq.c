@@ -127,11 +127,11 @@ static void mem_insert256(struct zhpeq_xq *zxq, uint16_t reservation16)
     union zhpe_hw_wq_entry *dst = xq_get_wq(zxq);
 
     asm volatile (
-        "vmovdqa    (%0), %%ymm0\n"
-        "vmovdqa  32(%0), %%ymm1\n"
-        "vmovntdq %%ymm1, 32(%1)\n"
-        "vmovntdq %%ymm0,   (%1)\n"
-        : : "r" (dst), "r" (src) : "%ymm0", "%ymm1");
+        "vmovdqa   (%[s]), %%ymm0\n"
+        "vmovdqa 32(%[s]), %%ymm1\n"
+        "vmovntdq  %%ymm1, 32(%[d])\n"
+        "vmovntdq  %%ymm0,   (%[d])\n"
+        : : [d] "r" (dst), [s] "r" (src) : "%ymm0", "%ymm1");
 }
 
 static void do_mcommit(void)
