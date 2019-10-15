@@ -407,8 +407,8 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
      * bitmap chunks are 64 bits, so it really seems easiest just to force
      * 64 as the minimum allocation.
      */
-    cmd_qlen = min(roundup_pow_of_2(cmd_qlen), (uint64_t)ZHPEQ_BITMAP_BITS);
-    cmp_qlen = min(roundup_pow_of_2(cmp_qlen), (uint64_t)ZHPEQ_BITMAP_BITS);
+    cmd_qlen = max(roundup_pow_of_2(cmd_qlen), (uint64_t)ZHPEQ_BITMAP_BITS);
+    cmp_qlen = max(roundup_pow_of_2(cmp_qlen), (uint64_t)ZHPEQ_BITMAP_BITS);
 
     ret = zhpe_xqalloc(xqi, cmd_qlen, cmp_qlen, traffic_class,
                        priority, slice_mask);
