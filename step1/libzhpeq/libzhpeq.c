@@ -146,7 +146,8 @@ static void no_mcommit(void)
 #ifdef ZHPEQ_DIRECT
 
 #define CPUID_0000_0007                 (0x00000007)
-#define CPUID_0000_0007_EBX_AVX2        (0x20)
+#define CPUID_0000_0007_SUB_0           (0x0)
+#define CPUID_0000_0007_SUB_0_EBX_AVX2  (0x20)
 
 static void __attribute__((constructor)) lib_init(void)
 {
@@ -162,10 +163,11 @@ static void __attribute__((constructor)) lib_init(void)
 
     /*
      * Both Naples and Rome support AVX2, Carbon does not. Naples
-     * supports 16 byte PCI writes, Rome supports 32.
+     * supports 16 byte UC writes, Rome supports 32.
      */
-    if (__get_cpuid(CPUID_0000_0007, &eax, &ebx, &ecx, &edx) &&
-        (ebx & CPUID_0000_0007_EBX_AVX2)) {
+    if (__get_cpuid_count(CPUID_0000_0007, CPUID_0000_0007_SUB_0,
+                          &eax, &ebx, &ecx, &edx) &&
+        (ebx & CPUID_0000_0007_SUB_0_EBX_AVX2)) {
         zhpeq_insert[INS_MEM] = mem_insert256;
         /*
          * We assume the driver enabled mcommit if it is possible.
