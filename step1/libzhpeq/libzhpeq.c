@@ -163,7 +163,12 @@ static void __attribute__((constructor)) lib_init(void)
 
     /*
      * Both Naples and Rome support AVX2, Carbon does not. Naples
-     * supports 16 byte UC writes, Rome supports 32.
+     * supports 16 byte UC writes, Rome supports 32. I will assume
+     * MCOMMIT cannot be enabled if AVX2 isn't supported and that
+     * MCOMMIT is a good proxy for 32 byte UC writes.
+     *
+     * The driver won't load on Intel platforms, so I'm not going
+     * to bother verifying AMD CPUs, here.
      */
     if (__get_cpuid_count(CPUID_0000_0007, CPUID_0000_0007_SUB_0,
                           &eax, &ebx, &ecx, &edx) &&
@@ -181,6 +186,8 @@ static void __attribute__((constructor)) lib_init(void)
         } else
             zhpeq_insert[INS_CMD] = cmd_insert128;
     }
+    if (getenv("ZHPEQ_DISABLE_CMD_BUF"))
+        zhpeq_insert[INS_CMD] = zhpeq_insert[INS_MEM];
 }
 
 #include "../step2/libzhpeq_backend/backend_zhpe.c"
@@ -388,7 +395,7 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
     xqi->pub.zdom = zdom;
 
     /*
-     * Questions:L
+     * Questions:
      * 1.) Code is much cleaner if I actually allocate to a power of 2,
      * but I could still honor the actual size and I am not.
      * 2.) The requires that we use one less than the queue size. Should I care
