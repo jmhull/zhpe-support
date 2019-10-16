@@ -69,12 +69,6 @@ enum {
     __IMPORT(MR_REQ_CPU_UC),
 };
 
-enum zhpeq_backend {
-    __IMPORT(BACKEND_ZHPE),
-    __IMPORT(BACKEND_LIBFABRIC),
-    __IMPORT(BACKEND_MAX),
-};
-
 #undef __IMPORT
 
 enum zhpeq_atomic_size {
@@ -122,6 +116,12 @@ enum zhpeq_xq_cq_status {
 };
 
 #undef __IMPORT
+
+enum zhpeq_backend {
+    ZHPEQ_BACKEND_ZHPE,
+    ZHPEQ_BACKEND_LIBFABRIC,
+    ZHPEQ_BACKEND_MAX,
+};
 
 enum {
     ZHPEQ_PRI_MAX               = 1,

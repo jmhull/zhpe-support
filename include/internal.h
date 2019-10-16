@@ -100,7 +100,8 @@ struct backend_ops {
 extern void             (*zhpeq_mcommit)(void);
 extern uuid_t           zhpeq_uuid;
 
-void zhpeq_register_backend(enum zhpe_backend backend, struct backend_ops *ops);
+void zhpeq_register_backend(enum zhpeq_backend backend,
+                            struct backend_ops *ops);
 void zhpeq_backend_libfabric_init(int fd);
 void zhpeq_backend_zhpe_init(int fd);
 
