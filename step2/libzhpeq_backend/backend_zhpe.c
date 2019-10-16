@@ -159,6 +159,14 @@ static int zhpe_lib_init(struct zhpeq_attr *attr)
     if (ret < 0)
         goto done;
 
+    if (!zhpeu_expected_saw("rsp->init.magic", ZHPE_MAGIC, rsp->init.magic)) {
+        ret = -EINVAL;
+        goto done;
+    }
+
+    attr->backend = ZHPEQ_BACKEND_ZHPE;
+    attr->z = rsp->init.attr;
+
     shared_global = _zhpeu_mmap(NULL, rsp->init.global_shared_size,
                                 PROT_READ, MAP_SHARED, dev_fd,
                                 rsp->init.global_shared_offset);
@@ -174,21 +182,7 @@ static int zhpe_lib_init(struct zhpeq_attr *attr)
         goto done;
     }
 
-    ret = -EINVAL;
-    if (!zhpeu_expected_saw("global_magic", ZHPE_MAGIC, shared_global->magic))
-        goto done;
-    if (!zhpeu_expected_saw("global_version", ZHPE_GLOBAL_SHARED_VERSION,
-                            shared_global->version))
-        goto done;
-    if (!zhpeu_expected_saw("local_magic", ZHPE_MAGIC, shared_local->magic))
-        goto done;
-    if (!zhpeu_expected_saw("local_version", ZHPE_LOCAL_SHARED_VERSION,
-                            shared_local->version))
-        goto done;
     memcpy(zhpeq_uuid, rsp->init.uuid, sizeof(zhpeq_uuid));
-
-    attr->backend = ZHPEQ_BACKEND_ZHPE;
-    attr->z = shared_global->default_attr;
 
     ret = 0;
  done:
