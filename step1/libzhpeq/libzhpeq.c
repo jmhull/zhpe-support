@@ -550,6 +550,7 @@ int32_t zhpeq_xq_reserve(struct zhpeq_xq *zxq, void *context)
     if (likely(ret)) {
         ret--;
         xqi->free_bitmap[0] &= ~((uint64_t)1 << ret);
+        zxq->ctx[ret] = context;
         /* INS_CMD == 0 */
         if (unlikely(ret >= ZHPE_XDM_QCM_CMD_BUF_COUNT))
             ret |= (INS_MEM << 16);
@@ -560,6 +561,7 @@ int32_t zhpeq_xq_reserve(struct zhpeq_xq *zxq, void *context)
                 ret--;
                 xqi->free_bitmap[i] &= ~((uint64_t)1 << ret);
                 ret += (i << ZHPEQ_BITMAP_SHIFT);
+                zxq->ctx[ret] = context;
                 ret |= (INS_MEM << 16);
                 goto done;
             }
