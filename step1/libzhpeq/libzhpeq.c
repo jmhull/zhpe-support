@@ -660,7 +660,7 @@ int zhpeq_rq_free(struct zhpeq_rq *zrq)
     }
 
     ret = 0;
-    /* Unmap qcm adn rq. */
+    /* Unmap qcm and rq. */
     rc = _zhpeu_munmap((void *)rqi->pub.qcm, rqi->pub.rqinfo.qcm.size);
     if (ret >= 0 && rc < 0)
         ret = rc;
@@ -702,9 +702,10 @@ int zhpeq_rq_alloc(struct zhpeq_dom *zdom, int rx_qlen, int slice_mask,
 
     ret = -ENOMEM;
     rqi = calloc_cachealigned(1, sizeof(*rqi));
-    if (rqi)
+    if (!rqi)
         goto done;
     rqi->pub.zdom = zdom;
+    rqi->dev_fd = -1;
 
     /* Same questions/comments as above. */
     orig = rx_qlen;
