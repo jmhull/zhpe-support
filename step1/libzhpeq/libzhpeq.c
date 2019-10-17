@@ -1188,6 +1188,9 @@ void zhpeq_print_qkdata(const char *func, uint line,
 {
     char                *id_str = NULL;
 
+    if (!qkdata)
+        return;
+
     id_str = zhpe_qkdata_id_str(qkdata);
     fprintf(stderr, "%s,%u:%p %s\n", func, line, qkdata, (id_str ?: ""));
     fprintf(stderr, "%s,%u:v/z/l 0x%Lx 0x%Lx 0x%Lx\n", func, line,
@@ -1207,6 +1210,9 @@ static void print_qcm1(const char *func, uint line, const volatile void *qcm,
 void zhpeq_print_xq_qcm(const char *func, uint line, const struct zhpeq_xq *zxq)
 {
     uint                i;
+
+    if (!zxq)
+        return;
 
     printf("%s,%u:%s %p\n", func, line, __func__, zxq->qcm);
     for (i = 0x00; i < 0x30; i += 0x08)
@@ -1315,6 +1321,8 @@ void zhpeq_print_xq_wq(struct zhpeq_xq *zxq, int cnt)
     uint32_t            qmask = zxq->xqinfo.cmdq.ent - 1;
     uint                i;
 
+    if (!zxq)
+        return;
     if (!cnt || cnt > qmask)
         cnt = qmask;
     if (cnt > zxq->wq_tail)
@@ -1330,6 +1338,8 @@ void zhpeq_print_xq_cq(struct zhpeq_xq *zxq, int cnt)
     union zhpe_hw_cq_entry *cqe;
     char                *d;
 
+    if (!zxq)
+        return;
     if (!cnt || cnt > qmask)
         cnt = qmask;
     if (cnt > zxq->cq_head)

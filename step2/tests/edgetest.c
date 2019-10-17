@@ -111,25 +111,23 @@ struct stuff {
 static void stuff_free(struct stuff *stuff)
 {
     void                *buf;
-    bool                qcm = (stuff->args && stuff->args->qcm);
 
     if (!stuff)
         return;
 
-    if (stuff->zxq) {
-        if (qcm)
-            zhpeq_print_qkdata(__func__, __LINE__, stuff->rem_kdata);
-        zhpeq_qkdata_free(stuff->rem_kdata);
+    if (stuff->args && stuff->args->qcm) {
+        zhpeq_print_qkdata(__func__, __LINE__, stuff->rem_kdata);
+        zhpeq_print_qkdata(__func__, __LINE__, stuff->lcl_kdata);
+        zhpeq_print_xq_qcm(__func__, __LINE__, stuff->zxq);
+    }
+    zhpeq_qkdata_free(stuff->rem_kdata);
+    if (stuff->lcl_kdata) {
         buf = (void *)stuff->lcl_kdata->z.vaddr;
-        if (qcm)
-            zhpeq_print_qkdata(__func__, __LINE__, stuff->lcl_kdata);
         zhpeq_qkdata_free(stuff->lcl_kdata);
         free(buf);
     }
     if (stuff->open_idx != -1)
         zhpeq_xq_backend_close(stuff->zxq, stuff->open_idx);
-    if (qcm)
-        zhpeq_print_xq_qcm(__func__, __LINE__, stuff->zxq);
     zhpeq_rq_free(stuff->zrq);
     zhpeq_xq_free(stuff->zxq);
     zhpeq_domain_free(stuff->zdom);
