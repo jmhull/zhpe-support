@@ -386,8 +386,8 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
         goto done;
     *zxq_out = NULL;
     if (!zdom || cmp_qlen < cmd_qlen ||
-        cmd_qlen < 2 || cmd_qlen > b_attr.z.max_tx_qlen ||
-        cmp_qlen < 2 || cmp_qlen > b_attr.z.max_tx_qlen ||
+        cmd_qlen < 1 || cmd_qlen > b_attr.z.max_tx_qlen ||
+        cmp_qlen < 1 || cmp_qlen > b_attr.z.max_tx_qlen ||
         traffic_class < 0 || traffic_class > ZHPEQ_TC_MAX ||
         priority < 0 || priority > ZHPEQ_PRI_MAX ||
         (slice_mask & ~(ALL_SLICES | SLICE_DEMAND)))
@@ -696,7 +696,7 @@ int zhpeq_rq_alloc(struct zhpeq_dom *zdom, int rx_qlen, int slice_mask,
     if (!zrq_out)
         goto done;
     *zrq_out = NULL;
-    if (!zdom || rx_qlen < 2 || rx_qlen > b_attr.z.max_rx_qlen ||
+    if (!zdom || rx_qlen < 1 || rx_qlen > b_attr.z.max_rx_qlen ||
         (slice_mask & ~(ALL_SLICES | SLICE_DEMAND)))
         goto done;
 
