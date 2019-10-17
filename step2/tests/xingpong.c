@@ -102,6 +102,7 @@ struct stuff {
     const struct args   *args;
     struct zhpeq_dom    *zdom;
     struct zhpeq_xq     *zxq;
+    struct zhpeq_rq     *zrq;
     struct zhpeq_key_data *zxq_local_kdata;
     struct zhpeq_key_data *zxq_remote_kdata;
     uint64_t            zxq_local_tx_zaddr;
@@ -142,6 +143,7 @@ static void stuff_free(struct stuff *stuff)
     }
     if (stuff->open_idx != -1)
         zhpeq_xq_backend_close(stuff->zxq, stuff->open_idx);
+    zhpeq_rq_free(stuff->zrq);
     zhpeq_xq_free(stuff->zxq);
     zhpeq_domain_free(stuff->zdom);
 
@@ -358,10 +360,10 @@ static int zxq_write(struct zhpeq_xq *zxq, const void *buf, uint64_t lcl_zaddr,
         goto done;
     }
     if (len <= ZHPEQ_IMM_MAX)
-        zhpeq_xq_puti(zxq, ret, false, buf, len, rem_zaddr);
+        zhpeq_xq_puti(zxq, ret, 0, buf, len, rem_zaddr);
     else
-        zhpeq_xq_put(zxq, ret, false, lcl_zaddr, len, rem_zaddr);
-    zhpeq_xq_insert(zxq, ret);
+        zhpeq_xq_put(zxq, ret, 0, lcl_zaddr, len, rem_zaddr);
+    zhpeq_xq_insert(zxq, ret, false);
     zhpeq_xq_commit(zxq);
  done:
 
@@ -761,15 +763,22 @@ int do_zxq_setup(struct stuff *conn)
         print_func_err(__func__, __LINE__, "zhpeq_domain_alloc", "", ret);
         goto done;
     }
-    /* Allocate zxqueue. */
+    /* Allocate zqueues. */
     ret = zhpeq_xq_alloc(conn->zdom, conn->tx_avail + 1, conn->tx_avail + 1,
                          0, 0, 0,  &conn->zxq);
     if (ret < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_xq_qalloc", "", ret);
         goto done;
     }
+
+    ret = zhpeq_rq_alloc(conn->zdom, 1, 0, &conn->zrq);
+    if (ret < 0) {
+        print_func_err(__func__, __LINE__, "zhpeq_rq_qalloc", "", ret);
+        goto done;
+    }
+
     /* Get address index. */
-    ret = zhpeq_xq_xchg_addr(conn->zxq, conn->sock_fd, &sa, &sa_len);
+    ret = zhpeq_rq_xchg_addr(conn->zrq, conn->sock_fd, &sa, &sa_len);
     if (ret < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_xq_xchg_addr",
                        "", ret);

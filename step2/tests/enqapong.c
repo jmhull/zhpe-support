@@ -46,23 +46,12 @@
 #define TIMEOUT         (10000)
 #endif
 #define WARMUP_MIN      (1024)
-#define RX_WINDOW       (64)
-#define TX_WINDOW       (64)
-#define L1_CACHELINE    ((size_t)64)
 #define ZXQ_LEN         (1023)
 
 struct cli_wire_msg {
-    uint64_t            ring_entry_len;
-    uint64_t            ring_entries;
-    uint64_t            tx_avail;
-    bool                aligned_mode;
-    bool                copy_mode;
+    uint64_t            tx_size;
+    uint64_t            rx_size;
     bool                once_mode;
-    bool                unidir_mode;
-};
-
-struct mem_wire_msg {
-    uint64_t            zxq_remote_rx_addr;
 };
 
 struct rx_queue {

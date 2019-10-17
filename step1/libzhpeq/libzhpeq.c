@@ -78,6 +78,7 @@ static void cmd_insert64(struct zhpeq_xq *zxq, uint16_t reservation16)
     union zhpe_hw_wq_entry *dst = &zxq->cmd[reservation16];
     size_t              i;
 
+    assert(!(src->hdr.opcode & ZHPE_HW_OPCODE_FENCE));
     for (i = 1; i < ARRAY_SIZE(dst->bytes8); i++)
         iowrite64(src->bytes8[i], &dst->bytes8[i]);
     iowrite64(src->bytes8[0], &dst->bytes8[0]);
@@ -96,6 +97,7 @@ static void cmd_insert128(struct zhpeq_xq *zxq, uint16_t reservation16)
     union zhpe_hw_wq_entry *src = &zxq->mem[reservation16];
     union zhpe_hw_wq_entry *dst = &zxq->cmd[reservation16];
 
+    assert(!(src->hdr.opcode & ZHPE_HW_OPCODE_FENCE));
     asm volatile (
         "vmovdqa   (%[s]), %%xmm0\n"
         "vmovdqa 16(%[s]), %%xmm1\n"
@@ -114,6 +116,7 @@ static void cmd_insert256(struct zhpeq_xq *zxq, uint16_t reservation16)
     union zhpe_hw_wq_entry *src = &zxq->mem[reservation16];
     union zhpe_hw_wq_entry *dst = &zxq->cmd[reservation16];
 
+    assert(!(src->hdr.opcode & ZHPE_HW_OPCODE_FENCE));
     asm volatile (
         "vmovdqa   (%[s]), %%ymm0\n"
         "vmovdqa 32(%[s]), %%ymm1\n"
@@ -334,7 +337,7 @@ int zhpeq_xq_free(struct zhpeq_xq *zxq)
             yield();
         }
     }
-    rc = zhpe_xqfree_pre(xqi);
+    rc = zhpe_xq_free_pre(xqi);
 
     ret = 0;
     /* Unmap qcm, wq, and cq. */
@@ -344,13 +347,13 @@ int zhpeq_xq_free(struct zhpeq_xq *zxq)
     rc = _zhpeu_munmap(xqi->pub.wq, xqi->pub.xqinfo.cmdq.size);
     if (ret >= 0 && rc < 0)
         ret = rc;
-    rc = _zhpeu_munmap(xqi->pub.cq, xqi->pub.xqinfo.cmplq.size);
+    rc = _zhpeu_munmap((void *)xqi->pub.cq, xqi->pub.xqinfo.cmplq.size);
     if (ret >= 0 && rc < 0)
         ret = rc;
 
     /* Call the driver to free the queue. */
     if (xqi->pub.xqinfo.qcm.size) {
-        rc = zhpe_xqfree(xqi);
+        rc = zhpe_xq_free(xqi);
         if (ret >= 0 && rc < 0)
             ret = rc;
     }
@@ -377,6 +380,7 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
     int                 flags;
     size_t              i;
     size_t              e;
+    size_t              orig;
 
     if (!zxq_out)
         goto done;
@@ -394,24 +398,28 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
     if (!xqi)
         goto done;
     xqi->pub.zdom = zdom;
+    xqi->dev_fd = -1;
 
     /*
      * Questions:
      * 1.) Code is much cleaner if I actually allocate to a power of 2,
      * but I could still honor the actual size and I am not.
-     * 2.) The requires that we use one less than the queue size. Should I care
-     * if the caller specified a power of 2, or should I just assume they
-     * understood the limitations.
      * A comment:
      * I really can't allocate less than a page the queue, 64 entries, and my
      * bitmap chunks are 64 bits, so it really seems easiest just to force
      * 64 as the minimum allocation.
      */
+    orig = cmd_qlen;
     cmd_qlen = max(roundup_pow_of_2(cmd_qlen), (uint64_t)ZHPEQ_BITMAP_BITS);
+    if (cmd_qlen == orig)
+        cmd_qlen *= 2;
+    orig = cmp_qlen;
     cmp_qlen = max(roundup_pow_of_2(cmp_qlen), (uint64_t)ZHPEQ_BITMAP_BITS);
+    if (cmp_qlen == orig)
+        cmp_qlen *= 2;
 
-    ret = zhpe_xqalloc(xqi, cmd_qlen, cmp_qlen, traffic_class,
-                       priority, slice_mask);
+    ret = zhpe_xq_alloc(xqi, cmd_qlen, cmp_qlen, traffic_class,
+                        priority, slice_mask);
     if (ret < 0)
         goto done;
 
@@ -435,12 +443,12 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
         xqi->free_bitmap[i] = ~(uint64_t)0;
     xqi->free_bitmap[e - 1] &= ~((uint64_t)1 << (ZHPEQ_BITMAP_BITS - 1));
 
-    /* xqi->fd == -1 means we're faking things out. */
-    flags = (xqi->fd == -1 ? MAP_ANONYMOUS | MAP_PRIVATE : MAP_SHARED);
+    /* xqi->dev_fd == -1 means we're faking things out. */
+    flags = (xqi->dev_fd == -1 ? MAP_ANONYMOUS | MAP_PRIVATE : MAP_SHARED);
 
     /* Map qcm, wq, and cq. */
     xqi->pub.qcm = _zhpeu_mmap(NULL, xqi->pub.xqinfo.qcm.size,
-                               PROT_READ | PROT_WRITE, flags, xqi->fd,
+                               PROT_READ | PROT_WRITE, flags, xqi->dev_fd,
                                xqi->pub.xqinfo.qcm.off);
     if (!xqi->pub.qcm) {
         ret = -errno;
@@ -449,22 +457,22 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
     xqi->pub.cmd = VPTR(xqi->pub.qcm, ZHPE_XDM_QCM_CMD_BUF_OFFSET);
 
     xqi->pub.wq = _zhpeu_mmap(NULL, xqi->pub.xqinfo.cmdq.size,
-                              PROT_READ | PROT_WRITE, flags, xqi->fd,
+                              PROT_READ | PROT_WRITE, flags, xqi->dev_fd,
                               xqi->pub.xqinfo.cmdq.off);
-    if (!xqi->pub.qcm) {
+    if (!xqi->pub.wq) {
         ret = -errno;
         goto done;
     }
 
     xqi->pub.cq = _zhpeu_mmap(NULL, xqi->pub.xqinfo.cmplq.size,
-                              PROT_READ | PROT_WRITE, flags, xqi->fd,
+                              PROT_READ | PROT_WRITE, flags, xqi->dev_fd,
                               xqi->pub.xqinfo.cmplq.off);
     if (!xqi->pub.cq) {
         ret = -errno;
         goto done;
     }
 
-    ret = zhpe_xqalloc_post(xqi);
+    ret = zhpe_xq_alloc_post(xqi);
     if (ret < 0)
         goto done;
 
@@ -487,27 +495,6 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
     return ret;
 }
 
-int zhpeq_xq_xchg_addr(struct zhpeq_xq *zxq, int sock_fd,
-                       void *sa, size_t *sa_len)
-{
-    int                 ret = -EINVAL;
-
-    if (!zxq || sock_fd == -1 || !sa || !sa_len)
-        goto done;
-
-    ret = zhpeq_xq_get_addr(zxq, sa, sa_len);
-    if (ret < 0)
-        goto done;
-    ret = zhpeu_sock_send_blob(sock_fd, sa, *sa_len);
-    if (ret < 0)
-        goto done;
-    ret = zhpeu_sock_recv_fixed_blob(sock_fd, sa, *sa_len);
-    if (ret < 0)
-        goto done;
- done:
-    return ret;
-}
-
 int zhpeq_xq_backend_open(struct zhpeq_xq *zxq, void *sa)
 {
     int                 ret = -EINVAL;
@@ -516,7 +503,7 @@ int zhpeq_xq_backend_open(struct zhpeq_xq *zxq, void *sa)
     if (!zxq)
         goto done;
 
-    ret = zhpe_open(xqi, sa);
+    ret = zhpe_xq_open(xqi, sa);
  done:
 
     return ret;
@@ -530,7 +517,7 @@ int zhpeq_xq_backend_close(struct zhpeq_xq *zxq, int open_idx)
     if (!zxq)
         goto done;
 
-    ret = zhpe_close(xqi, open_idx);
+    ret = zhpe_xq_close(xqi, open_idx);
  done:
 
     return ret;
@@ -597,20 +584,28 @@ static void *get_context(struct zhpeq_xqi *xqi, struct zhpe_cq_entry *cqe)
 
 static void set_atomic_operands(union zhpe_hw_wq_entry *wqe,
                                 enum zhpeq_atomic_size datasize,
-                                uint64_t op1, uint64_t op2)
+                                int n_ops, const uint64_t *operands)
 {
     switch (datasize) {
 
     case ZHPEQ_ATOMIC_SIZE32:
         wqe->atm.size = ZHPE_HW_ATOMIC_SIZE_32 | ZHPE_HW_ATOMIC_RETURN;
-        wqe->atm.operands32[0] = op1;
-        wqe->atm.operands32[1] = op2;
+        if (n_ops == 1)
+            wqe->atm.operands32[0] = operands[0];
+        else {
+            wqe->atm.operands32[0] = operands[1];
+            wqe->atm.operands32[1] = operands[0];
+        }
         break;
 
     case ZHPEQ_ATOMIC_SIZE64:
         wqe->atm.size |= ZHPE_HW_ATOMIC_SIZE_64 | ZHPE_HW_ATOMIC_RETURN;
-        wqe->atm.operands64[0] = op1;
-        wqe->atm.operands64[1] = op2;
+        if (n_ops == 1)
+            wqe->atm.operands64[0] = operands[0];
+        else {
+            wqe->atm.operands64[0] = operands[1];
+            wqe->atm.operands64[1] = operands[0];
+        }
         break;
 
     default:
@@ -618,34 +613,180 @@ static void set_atomic_operands(union zhpe_hw_wq_entry *wqe,
     }
 }
 
-void zhpeq_atomic(struct zhpeq_xq *zxq, int32_t reservation, uint16_t fence,
-                  enum zhpeq_atomic_size datasize, enum zhpeq_atomic_op op,
-                  uint64_t rem_addr, const uint64_t *operands)
+void zhpeq_xq_atomic(struct zhpeq_xq *zxq, int32_t reservation,
+                     uint16_t op_flags, enum zhpeq_atomic_size datasize,
+                     enum zhpeq_atomic_op op, uint64_t rem_addr,
+                     const uint64_t *operands)
 {
     union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
 
+    wqe->hdr.opcode = op | op_flags;
     wqe->atm.rem_addr = rem_addr;
 
     switch (op) {
 
     case ZHPEQ_ATOMIC_ADD:
-        wqe->hdr.opcode = ZHPE_HW_OPCODE_ATM_ADD | fence;
-        set_atomic_operands(wqe, datasize, operands[0], 0);
+    case ZHPEQ_ATOMIC_SWAP:
+        set_atomic_operands(wqe, datasize, 1, operands);
         break;
 
     case ZHPEQ_ATOMIC_CAS:
-        wqe->hdr.opcode = ZHPE_HW_OPCODE_ATM_CAS | fence;
-        set_atomic_operands(wqe, datasize, operands[1], operands[0]);
-        break;
-
-    case ZHPEQ_ATOMIC_SWAP:
-        wqe->hdr.opcode = ZHPE_HW_OPCODE_ATM_SWAP | fence;
-        set_atomic_operands(wqe, datasize, operands[0], 0);
+        set_atomic_operands(wqe, datasize, 2, operands);
         break;
 
     default:
         abort();
     }
+}
+
+int zhpeq_rq_free(struct zhpeq_rq *zrq)
+{
+    int                 ret = -EINVAL;
+    struct zhpeq_rqi    *rqi = container_of(zrq, struct zhpeq_rqi, pub);
+    int                 rc;
+    union rdm_active    active;
+
+    if (!zrq)
+        goto done;
+    /* Stop the queue. */
+    if (rqi->pub.qcm) {
+        qcmwrite64(1, rqi->pub.qcm, ZHPE_RDM_QCM_STOP_OFFSET);
+        for (;;) {
+            active.u64 = qcmread64(rqi->pub.qcm, ZHPE_RDM_QCM_ACTIVE_OFFSET);
+            if (!active.bits.active)
+                break;
+            yield();
+        }
+    }
+
+    ret = 0;
+    /* Unmap qcm adn rq. */
+    rc = _zhpeu_munmap((void *)rqi->pub.qcm, rqi->pub.rqinfo.qcm.size);
+    if (ret >= 0 && rc < 0)
+        ret = rc;
+    rc = _zhpeu_munmap((void *)rqi->pub.rq, rqi->pub.rqinfo.cmplq.size);
+    if (ret >= 0 && rc < 0)
+        ret = rc;
+
+    /* Call the driver to free the queue. */
+    if (rqi->pub.rqinfo.qcm.size) {
+        rc = zhpe_rq_free(rqi);
+        if (ret >= 0 && rc < 0)
+            ret = rc;
+    }
+
+    /* Free queue memory. */
+    free(rqi);
+
+ done:
+    return ret;
+}
+
+int zhpeq_rq_alloc(struct zhpeq_dom *zdom, int rx_qlen, int slice_mask,
+                   struct zhpeq_rq **zrq_out)
+{
+    int                 ret = -EINVAL;
+    struct zhpeq_rqi    *rqi = NULL;
+    union rdm_rcv_tail  tail = {
+        .bits.toggle_valid = 1,
+    };
+    int                 flags;
+    size_t              orig;
+
+    if (!zrq_out)
+        goto done;
+    *zrq_out = NULL;
+    if (!zdom || rx_qlen < 2 || rx_qlen > b_attr.z.max_rx_qlen ||
+        (slice_mask & ~(ALL_SLICES | SLICE_DEMAND)))
+        goto done;
+
+    ret = -ENOMEM;
+    rqi = calloc_cachealigned(1, sizeof(*rqi));
+    if (rqi)
+        goto done;
+    rqi->pub.zdom = zdom;
+
+    /* Same questions/comments as above. */
+    orig = rx_qlen;
+    rx_qlen = roundup_pow_of_2(rx_qlen);
+    if (rx_qlen == orig)
+        rx_qlen *= 2;
+
+    ret = zhpe_rq_alloc(rqi, rx_qlen, slice_mask);
+    if (ret < 0)
+        goto done;
+
+    /* rqi->dev_fd == -1 means we're faking things out. */
+    flags = (rqi->dev_fd == -1 ? MAP_ANONYMOUS | MAP_PRIVATE : MAP_SHARED);
+
+    /* Map qcm, wq, and cq. */
+    rqi->pub.qcm = _zhpeu_mmap(NULL, rqi->pub.rqinfo.qcm.size,
+                               PROT_READ | PROT_WRITE, flags, rqi->dev_fd,
+                               rqi->pub.rqinfo.qcm.off);
+    if (!rqi->pub.qcm) {
+        ret = -errno;
+        goto done;
+    }
+
+    rqi->pub.rq = _zhpeu_mmap(NULL, rqi->pub.rqinfo.cmplq.size,
+                              PROT_READ | PROT_WRITE, flags, rqi->dev_fd,
+                              rqi->pub.rqinfo.cmplq.off);
+    if (!rqi->pub.rq) {
+        ret = -errno;
+        goto done;
+    }
+
+    /* Initialize receive tail to zero and set toggle bit. */
+    qcmwrite64(tail.u64, rqi->pub.qcm,
+               ZHPE_RDM_QCM_RCV_QUEUE_TAIL_TOGGLE_OFFSET);
+    /* Intialize receive head to zero. */
+    qcmwrite64(0, rqi->pub.qcm, ZHPE_RDM_QCM_RCV_QUEUE_HEAD_OFFSET);
+    /* Start the queue. */
+    qcmwrite64(0, rqi->pub.qcm, ZHPE_RDM_QCM_STOP_OFFSET);
+    ret = 0;
+ done:
+
+    if (ret >= 0)
+        *zrq_out = &rqi->pub;
+    else
+        (void)zhpeq_rq_free(&rqi->pub);
+
+    return ret;
+}
+
+int zhpeq_rq_xchg_addr(struct zhpeq_rq *zrq, int sock_fd,
+                       void *sa, size_t *sa_len)
+{
+    int                 ret = -EINVAL;
+
+    if (!zrq || sock_fd == -1 || !sa || !sa_len)
+        goto done;
+
+    ret = zhpeq_rq_get_addr(zrq, sa, sa_len);
+    if (ret < 0)
+        goto done;
+    ret = _zhpeu_sock_send_blob(sock_fd, sa, *sa_len);
+    if (ret < 0)
+        goto done;
+    ret = _zhpeu_sock_recv_fixed_blob(sock_fd, sa, *sa_len);
+    if (ret < 0)
+        goto done;
+ done:
+    return ret;
+}
+
+int zhpeq_rq_get_addr(struct zhpeq_rq *zrq, void *sa, size_t *sa_len)
+{
+    ssize_t             ret = -EINVAL;
+    struct zhpeq_rqi    *rqi = container_of(zrq, struct zhpeq_rqi, pub);
+
+    if (!zrq || !sa || !sa_len)
+        goto done;
+
+    ret = zhpe_rq_get_addr(rqi, sa, sa_len);
+ done:
+
+    return ret;
 }
 
 int zhpeq_mr_reg(struct zhpeq_dom *zdom, const void *buf, size_t len,
@@ -885,7 +1026,7 @@ ssize_t zhpeq_xq_cq_read(struct zhpeq_xq *zxq,
 {
     ssize_t             ret = -EINVAL;
     struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, pub);
-    union zhpe_hw_cq_entry *cqe;
+    volatile union zhpe_hw_cq_entry *cqe;
     ssize_t             i;
     uint32_t            qmask;
 
@@ -941,20 +1082,6 @@ void zhpeq_print_xq_info(struct zhpeq_xq *zxq)
 
     printf("\n");
     zhpe_print_xq_info(xqi);
-}
-
-int zhpeq_xq_get_addr(struct zhpeq_xq *zxq, void *sa, size_t *sa_len)
-{
-    ssize_t             ret = -EINVAL;
-    struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, pub);
-
-    if (!zxq || !sa || !sa_len)
-        goto done;
-
-    ret = zhpe_xq_get_addr(xqi, sa, sa_len);
- done:
-
-    return ret;
 }
 
 #if 0
@@ -1208,7 +1335,7 @@ void zhpeq_print_xq_cq(struct zhpeq_xq *zxq, int cnt)
     if (cnt > zxq->cq_head)
         cnt = zxq->cq_head;
     for (i = zxq->cq_head - cnt ; cnt > 0; i++, cnt--) {
-        cqe = &zxq->cq[i & qmask];
+        cqe = (void *)&zxq->cq[i & qmask];
         /* Print the first 8 bytes of the result */
         d = cqe->entry.result.data;
         fprintf(stderr, "%7d:v %u idx 0x%04x status 0x%02x"

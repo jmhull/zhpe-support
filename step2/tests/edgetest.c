@@ -98,6 +98,7 @@ struct stuff {
     const struct args   *args;
     struct zhpeq_dom    *zdom;
     struct zhpeq_xq     *zxq;
+    struct zhpeq_rq     *zrq;
     struct zhpeq_key_data *lcl_kdata;
     struct zhpeq_key_data *rem_kdata;
     uint64_t            lcl_zaddr;
@@ -129,6 +130,7 @@ static void stuff_free(struct stuff *stuff)
         zhpeq_xq_backend_close(stuff->zxq, stuff->open_idx);
     if (qcm)
         zhpeq_print_xq_qcm(__func__, __LINE__, stuff->zxq);
+    zhpeq_rq_free(stuff->zrq);
     zhpeq_xq_free(stuff->zxq);
     zhpeq_domain_free(stuff->zdom);
 
@@ -253,8 +255,8 @@ static int geti_handler(struct zhpeq_xq_cq_entry *cqe, struct op_context *ctxt)
     return 0;
 }
 
-static int zxq_op(struct zhpeq_xq *zxq, bool read, void *lcl_buf,
-                  uint64_t lcl_zaddr, size_t len, uint64_t rem_zaddr)
+static int zxq_rma_op(struct zhpeq_xq *zxq, bool read, void *lcl_buf,
+                      uint64_t lcl_zaddr, size_t len, uint64_t rem_zaddr)
 {
     int32_t             ret;
     struct op_context   ctxt = {
@@ -271,14 +273,14 @@ static int zxq_op(struct zhpeq_xq *zxq, bool read, void *lcl_buf,
             ctxt.handler = geti_handler;
             ctxt.data = lcl_buf;
             ctxt.len = len;
-            zhpeq_xq_geti(zxq, ret, false, len, rem_zaddr);
+            zhpeq_xq_geti(zxq, ret, 0, len, rem_zaddr);
         } else
-            zhpeq_xq_get(zxq, ret, false, lcl_zaddr, len, rem_zaddr);
+            zhpeq_xq_get(zxq, ret, 0, lcl_zaddr, len, rem_zaddr);
     } else if (lcl_buf)
-        zhpeq_xq_puti(zxq, ret, false, lcl_buf, len, rem_zaddr);
+        zhpeq_xq_puti(zxq, ret, 0, lcl_buf, len, rem_zaddr);
     else
-        zhpeq_xq_put(zxq, ret, false, lcl_zaddr, len, rem_zaddr);
-    zhpeq_xq_insert(zxq, ret);
+        zhpeq_xq_put(zxq, ret, 0, lcl_zaddr, len, rem_zaddr);
+    zhpeq_xq_insert(zxq, ret, false);
     zhpeq_xq_commit(zxq);
     while (!(ret = zxq_completions(zxq)));
     if (ret > 0 && !expected_saw("completions", 1, ret))
@@ -479,8 +481,8 @@ static int do_client_1op(struct stuff *conn, struct checker_data *data,
     /* Fill buffer for put. */
     ramp_buf(conn, data, true);
     /* Do put. */
-    ret = zxq_op(conn->zxq, false, lcl_buf, lcl_zaddr, data->op_msg.op_len,
-                rem_zaddr);
+    ret = zxq_rma_op(conn->zxq, false, lcl_buf, lcl_zaddr, data->op_msg.op_len,
+                     rem_zaddr);
     if (ret < 0)
         goto done;
     ret = sock_send_blob(conn->sock_fd, NULL, 0);
@@ -501,8 +503,8 @@ static int do_client_1op(struct stuff *conn, struct checker_data *data,
     /* Overwrite ramp for get. */
     fill_buf(conn, data, true);
     /* Do get. */
-    ret = zxq_op(conn->zxq, true, lcl_buf, lcl_zaddr, data->op_msg.op_len,
-                rem_zaddr);
+    ret = zxq_rma_op(conn->zxq, true, lcl_buf, lcl_zaddr, data->op_msg.op_len,
+                     rem_zaddr);
     if (ret < 0)
         goto done;
     rc = check_buf(conn, data, imm, true);
@@ -576,7 +578,7 @@ int do_zxq_setup(struct stuff *conn)
         print_func_err(__func__, __LINE__, "zhpeq_domain_alloc", "", ret);
         goto done;
     }
-    /* Allocate zxqueue. */
+    /* Allocate zqueues. */
     ret = zhpeq_xq_alloc(conn->zdom, ZXQ_LEN, ZXQ_LEN, 0, 0, 0,  &conn->zxq);
     if (ret < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_xq_alloc", "", ret);
@@ -584,8 +586,15 @@ int do_zxq_setup(struct stuff *conn)
     }
     if (conn->args->qcm)
         zhpeq_print_xq_qcm(__func__, __LINE__, conn->zxq);
+
+    ret = zhpeq_rq_alloc(conn->zdom, 1, 0, &conn->zrq);
+    if (ret < 0) {
+        print_func_err(__func__, __LINE__, "zhpeq_rq_qalloc", "", ret);
+        goto done;
+    }
+
     /* Get address index. */
-    ret = zhpeq_xq_xchg_addr(conn->zxq, conn->sock_fd, &sa, &sa_len);
+    ret = zhpeq_rq_xchg_addr(conn->zrq, conn->sock_fd, &sa, &sa_len);
     if (ret < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_xq_xchg_addr", "", ret);
         goto done;

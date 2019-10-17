@@ -286,8 +286,28 @@ static int zhpe_domain(struct zhpeq_domi *zdomi)
     return ret;
 }
 
-static int zhpe_xqalloc(struct zhpeq_xqi *xqi, int wqlen, int cqlen,
-                       int traffic_class, int priority, int slice_mask)
+static int zhpe_xq_free_pre(struct zhpeq_xqi *xqi)
+{
+    return 0;
+}
+
+static int zhpe_xq_free(struct zhpeq_xqi *xqi)
+{
+
+    int                 ret;
+    union zhpe_op       op;
+    union zhpe_req      *req = &op.req;
+    union zhpe_rsp      *rsp = &op.rsp;
+
+    req->hdr.opcode = ZHPE_OP_XQFREE;
+    req->xqfree.info = xqi->pub.xqinfo;
+    ret = driver_cmd(&op, sizeof(req->xqfree), sizeof(rsp->xqfree), true);
+
+    return ret;
+}
+
+static int zhpe_xq_alloc(struct zhpeq_xqi *xqi, int wqlen, int cqlen,
+                         int traffic_class, int priority, int slice_mask)
 {
     int                 ret;
     union zhpe_op       op;
@@ -303,15 +323,14 @@ static int zhpe_xqalloc(struct zhpeq_xqi *xqi, int wqlen, int cqlen,
     ret = driver_cmd(&op, sizeof(req->xqalloc), sizeof(rsp->xqalloc), true);
     if (ret < 0)
         goto done;
-    xqi->fd = dev_fd;
+    xqi->dev_fd = dev_fd;
     xqi->pub.xqinfo = rsp->xqalloc.info;
-
  done:
 
     return ret;
 }
 
-static int zhpe_xqalloc_post(struct zhpeq_xqi *xqi)
+static int zhpe_xq_alloc_post(struct zhpeq_xqi *xqi)
 {
     return 0;
 }
@@ -324,7 +343,7 @@ static inline struct zdom_data *xqi2bdom(struct zhpeq_xqi *xqi)
     return zdomi->backend_data;
 }
 
-static int zhpe_open(struct zhpeq_xqi *xqi, void *sa)
+static int zhpe_xq_open(struct zhpeq_xqi *xqi, void *sa)
 {
     int                 ret = 0;
     struct zdom_data    *bdom = xqi2bdom(xqi);
@@ -409,7 +428,7 @@ static int zhpe_open(struct zhpeq_xqi *xqi, void *sa)
     return ret;
 }
 
-static int zhpe_close(struct zhpeq_xqi *xqi, int open_idx)
+static int zhpe_xq_close(struct zhpeq_xqi *xqi, int open_idx)
 {
     int                 ret = -EINVAL;
     struct zdom_data    *bdom = xqi2bdom(xqi);
@@ -430,12 +449,7 @@ static int zhpe_close(struct zhpeq_xqi *xqi, int open_idx)
     return ret;
 }
 
-static int zhpe_xqfree_pre(struct zhpeq_xqi *xqi)
-{
-    return 0;
-}
-
-static int zhpe_xqfree(struct zhpeq_xqi *xqi)
+static int zhpe_rq_free(struct zhpeq_rqi *rqi)
 {
 
     int                 ret;
@@ -443,9 +457,29 @@ static int zhpe_xqfree(struct zhpeq_xqi *xqi)
     union zhpe_req      *req = &op.req;
     union zhpe_rsp      *rsp = &op.rsp;
 
-    req->hdr.opcode = ZHPE_OP_XQFREE;
-    req->xqfree.info = xqi->pub.xqinfo;
-    ret = driver_cmd(&op, sizeof(req->xqfree), sizeof(rsp->xqfree), true);
+    req->hdr.opcode = ZHPE_OP_RQFREE;
+    req->rqfree.info = rqi->pub.rqinfo;
+    ret = driver_cmd(&op, sizeof(req->rqfree), sizeof(rsp->rqfree), true);
+
+    return ret;
+}
+
+static int zhpe_rq_alloc(struct zhpeq_rqi *rqi, int rqlen, int slice_mask)
+{
+    int                 ret;
+    union zhpe_op       op;
+    union zhpe_req      *req = &op.req;
+    union zhpe_rsp      *rsp = &op.rsp;
+
+    req->hdr.opcode = ZHPE_OP_RQALLOC;
+    req->rqalloc.cmplq_ent = rqlen;
+    req->rqalloc.slice_mask = slice_mask;
+    ret = driver_cmd(&op, sizeof(req->rqalloc), sizeof(rsp->rqalloc), true);
+    if (ret < 0)
+        goto done;
+    rqi->dev_fd = dev_fd;
+    rqi->pub.rqinfo = rsp->rqalloc.info;
+ done:
 
     return ret;
 }
@@ -922,7 +956,7 @@ static void zhpe_print_xq_info(struct zhpeq_xqi *xqi)
     zhpeu_print_info("GenZ ASIC backend\n");
 }
 
-static int zhpe_xq_get_addr(struct zhpeq_xqi *xqi, void *sa, size_t *sa_len)
+static int zhpe_rq_get_addr(struct zhpeq_rqi *rqi, void *sa, size_t *sa_len)
 {
     int                 ret = -EOVERFLOW;
     struct sockaddr_zhpe *sz = sa;
@@ -932,7 +966,7 @@ static int zhpe_xq_get_addr(struct zhpeq_xqi *xqi, void *sa, size_t *sa_len)
 
     sz->sz_family = AF_ZHPE;
     memcpy(sz->sz_uuid, &zhpeq_uuid, sizeof(sz->sz_uuid));
-    sz->sz_queue = ZHPE_SZQ_INVAL;
+    sz->sz_queue = rqi->pub.rqinfo.rspctxid;
     ret = 0;
 
  done:
@@ -961,12 +995,13 @@ static char *zhpe_qkdata_id_str(const struct zhpeq_key_data *qkdata)
 
 #ifndef ZHPEQ_DIRECT
 
+/* Out of date, but keep for now. */
 struct backend_ops ops = {
     .lib_init           = zhpe_lib_init,
     .domain             = zhpe_domain,
     .domain_free        = zhpe_domain_free,
-    .qalloc             = zhpe_qalloc,
-    .qfree              = zhpe_qfree,
+    .qalloc             = zhpe_alloc,
+    .qfree              = zhpe_free,
     .open               = zhpe_open,
     .close              = zhpe_close,
     .wq_signal          = zhpe_wq_signal,
@@ -980,7 +1015,7 @@ struct backend_ops ops = {
     .mmap_unmap         = zhpe_mmap_unmap,
     .mmap_commit        = zhpe_mmap_commit,
     .print_xq_info      = zhpe_print_xq_info,
-    .xq_get_addr        = zhpe_xq_get_addr,
+    .xq_get_addr        = zhpe_get_addr,
     .qkdata_id_str      = zhpe_qkdata_id_str,
 };
 

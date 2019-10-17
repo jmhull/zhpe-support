@@ -167,13 +167,24 @@ struct zhpeq_xq {
     volatile void       *qcm;
     union zhpe_hw_wq_entry *cmd;
     union zhpe_hw_wq_entry *wq;
-    union zhpe_hw_cq_entry *cq;
+    volatile union zhpe_hw_cq_entry *cq;
     void                **ctx;
     union zhpe_hw_wq_entry *mem;
     uint32_t            wq_tail;
     uint32_t            wq_tail_commit;
     uint32_t            cq_head;
 };
+
+typedef void (*zhpeq_xq_entry_insert_fn)(struct zhpeq_xq *zxq,
+                                         uint16_t reservation16);
+enum zhpeq_insert_idx {
+    ZHPEQ_INSERT_CMD    = 0,
+    ZHPEQ_INSERT_MEM,
+    ZHPEQ_INSERT_LEN,
+    ZHPEQ_INSERT_SHIFT  = 16,
+};
+
+extern zhpeq_xq_entry_insert_fn zhpeq_insert[];
 
 struct zhpeq_rq {
     struct zhpeq_dom    *zdom;
@@ -238,6 +249,138 @@ int zhpeq_xq_backend_close(struct zhpeq_xq *zxq, int open_idx);
 ssize_t zhpeq_xq_cq_read(struct zhpeq_xq *zxq,
                          struct zhpeq_xq_cq_entry *entries, size_t n_entries);
 
+static inline uint64_t ioread64(const volatile void *addr)
+{
+    return le64toh(*(const volatile uint64_t *)addr);
+}
+
+static inline void iowrite64(uint64_t value, volatile void *addr)
+{
+    *(volatile uint64_t *)addr = htole64(value);
+}
+
+static inline uint64_t qcmread64(const volatile void *qcm, size_t off)
+{
+    return ioread64((char *)qcm + off);
+}
+
+static inline void qcmwrite64(uint64_t value, volatile void *qcm, size_t off)
+{
+    iowrite64(value, (char *)qcm + off);
+}
+
+int32_t zhpeq_xq_reserve(struct zhpeq_xq *zxq, void *context);
+void zhpeq_xq_commit(struct zhpeq_xq *zxq);
+
+static inline void zhpeq_xq_insert(struct zhpeq_xq *zxq, int32_t reservation,
+                                   bool force_mem)
+{
+    /*
+     * Fence operations on work on memory queue ops; set force_mem to true
+     * if fences will be used. The assumption is that force_mem will
+     * usually a constant.
+     */
+    if (force_mem)
+        zhpeq_insert[ZHPEQ_INSERT_MEM](zxq, reservation);
+    else
+        zhpeq_insert[reservation >> ZHPEQ_INSERT_SHIFT](zxq, reservation);
+}
+
+static inline void zhpeq_xq_nop(struct zhpeq_xq *zxq, int32_t reservation,
+                                uint16_t op_flags)
+{
+    union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
+
+    wqe->hdr.opcode = ZHPE_HW_OPCODE_NOP | op_flags;
+}
+
+static inline void zhpeq_xq_sync(struct zhpeq_xq *zxq, int32_t reservation,
+                                 uint16_t op_flags)
+{
+    union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
+
+    wqe->hdr.opcode = ZHPE_HW_OPCODE_SYNC | ZHPE_HW_OPCODE_FENCE | op_flags;
+}
+
+static inline void zhpeq_xq_rw(struct zhpeq_xq *zxq, int32_t reservation,
+                               uint16_t opcode, uint64_t rd_addr, size_t len,
+                               uint64_t wr_addr)
+{
+    union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
+
+    wqe->hdr.opcode = opcode;
+    wqe->dma.len = len;
+    wqe->dma.rd_addr = rd_addr;
+    wqe->dma.wr_addr = wr_addr;
+}
+
+static inline void zhpeq_xq_put(struct zhpeq_xq *zxq, int32_t reservation,
+                                uint16_t op_flags, uint64_t lcl_addr,
+                                size_t len, uint64_t rem_addr)
+{
+    zhpeq_xq_rw(zxq, reservation, (ZHPE_HW_OPCODE_PUT | op_flags),
+                lcl_addr, len, rem_addr);
+}
+
+static inline void zhpeq_xq_puti(struct zhpeq_xq *zxq, int32_t reservation,
+                                 uint16_t op_flags, const void *buf, size_t len,
+                                 uint64_t rem_addr)
+{
+    union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
+
+    wqe->hdr.opcode = ZHPE_HW_OPCODE_PUTIMM | op_flags;
+    wqe->imm.len = len;
+    wqe->imm.rem_addr = rem_addr;
+    memcpy(wqe->imm.data, buf, len);
+}
+
+static inline void zhpeq_xq_get(struct zhpeq_xq *zxq, int32_t reservation,
+                                uint16_t op_flags, uint64_t lcl_addr,
+                                size_t len, uint64_t rem_addr)
+{
+    zhpeq_xq_rw(zxq, reservation, (ZHPE_HW_OPCODE_GET | op_flags),
+                rem_addr, len, lcl_addr);
+}
+
+static inline void zhpeq_xq_geti(struct zhpeq_xq *zxq, int32_t reservation,
+                                 uint16_t op_flags, size_t len,
+                                 uint64_t rem_addr)
+{
+    union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
+
+    wqe->hdr.opcode = ZHPE_HW_OPCODE_GETIMM | op_flags;
+    wqe->imm.len = len;
+    wqe->imm.rem_addr = rem_addr;
+}
+
+static inline void *zhpeq_xq_enqa(struct zhpeq_xq *zxq, int32_t reservation,
+                                  uint16_t op_flags, uint32_t dgcid,
+                                  uint32_t rspctxid)
+{
+    union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
+
+    wqe->hdr.opcode = ZHPE_HW_OPCODE_ENQA | op_flags;
+    wqe->enqa_alt.dgcid = dgcid << ZHPE_ENQA_GCID_SHIFT;
+    wqe->enqa_alt.rspctxid = rspctxid;
+
+    return wqe->enqa_alt.payload;
+}
+
+void zhpeq_xq_atomic(struct zhpeq_xq *zxq, int32_t reservation,
+                     uint16_t op_flags, enum zhpeq_atomic_size datasize,
+                     enum zhpeq_atomic_op op, uint64_t rem_addr,
+                     const uint64_t *operands);
+
+int zhpeq_rq_free(struct zhpeq_rq *zrq);
+
+int zhpeq_rq_alloc(struct zhpeq_dom *zdom, int rx_qlen, int slice_mask,
+                   struct zhpeq_rq **zrq_out);
+
+int zhpeq_rq_get_addr(struct zhpeq_rq *zrq, void *sa, size_t *sa_len);
+
+int zhpeq_rq_xchg_addr(struct zhpeq_rq *zrq, int sock_fd,
+                       void *sa, size_t *sa_len);
+
 int zhpeq_mr_reg(struct zhpeq_dom *zdom, const void *buf, size_t len,
                  uint32_t access, struct zhpeq_key_data **qkdata_out);
 
@@ -265,119 +408,7 @@ int zhpeq_mmap_commit(struct zhpeq_mmap_desc *zmdesc,
                       const void *addr, size_t length, bool fence,
                       bool invalidate, bool wait);
 
-static inline uint64_t ioread64(const volatile void *addr)
-{
-    return le64toh(*(const volatile uint64_t *)addr);
-}
-
-static inline void iowrite64(uint64_t value, volatile void *addr)
-{
-    *(volatile uint64_t *)addr = htole64(value);
-}
-
-static inline uint64_t qcmread64(const volatile void *qcm, size_t off)
-{
-    return ioread64((char *)qcm + off);
-}
-
-static inline void qcmwrite64(uint64_t value, volatile void *qcm, size_t off)
-{
-    iowrite64(value, (char *)qcm + off);
-}
-
-int32_t zhpeq_xq_reserve(struct zhpeq_xq *zxq, void *context);
-void zhpeq_xq_commit(struct zhpeq_xq *zxq);
-
-typedef void (*zhpeq_xq_entry_insert_fn)(struct zhpeq_xq *zxq,
-                                         uint16_t reservation16);
-extern zhpeq_xq_entry_insert_fn zhpeq_insert[];
-
-static inline void zhpeq_xq_insert(struct zhpeq_xq *zxq, int32_t reservation)
-{
-   zhpeq_insert[reservation >> 16](zxq, reservation);
-}
-
-static inline void zhpeq_xq_nop(struct zhpeq_xq *zxq, int32_t reservation,
-                                uint16_t fence)
-{
-    union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
-
-    wqe->hdr.opcode = ZHPE_HW_OPCODE_NOP | fence;
-}
-
-static inline void zhpeq_xq_sync(struct zhpeq_xq *zxq, int32_t reservation)
-{
-    union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
-
-    wqe->hdr.opcode = ZHPE_HW_OPCODE_SYNC | ZHPE_HW_OPCODE_FENCE;
-}
-
-static inline void zhpeq_xq_rw(struct zhpeq_xq *zxq, int32_t reservation,
-                               uint16_t opcode, uint64_t rd_addr, size_t len,
-                               uint64_t wr_addr)
-{
-    union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
-
-    wqe->hdr.opcode = opcode;
-    wqe->dma.len = len;
-    wqe->dma.rd_addr = rd_addr;
-    wqe->dma.wr_addr = wr_addr;
-}
-
-static inline void zhpeq_xq_put(struct zhpeq_xq *zxq, int32_t reservation,
-                                uint16_t fence, uint64_t lcl_addr, size_t len,
-                                uint64_t rem_addr)
-{
-    zhpeq_xq_rw(zxq, reservation, (ZHPE_HW_OPCODE_PUT | fence),
-                lcl_addr, len, rem_addr);
-}
-
-static inline void zhpeq_xq_puti(struct zhpeq_xq *zxq, int32_t reservation,
-                                 uint16_t fence, const void *buf, size_t len,
-                                 uint64_t rem_addr)
-{
-    union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
-
-    wqe->hdr.opcode = ZHPE_HW_OPCODE_PUTIMM | fence;
-    wqe->imm.len = len;
-    wqe->imm.rem_addr = rem_addr;
-    memcpy(wqe->imm.data, buf, len);
-}
-
-static inline void zhpeq_xq_get(struct zhpeq_xq *zxq, int32_t reservation,
-                                uint16_t fence, uint64_t lcl_addr, size_t len,
-                                uint64_t rem_addr)
-{
-    zhpeq_xq_rw(zxq, reservation, (ZHPE_HW_OPCODE_GET | fence),
-                rem_addr, len, lcl_addr);
-}
-
-static inline void zhpeq_xq_geti(struct zhpeq_xq *zxq, int32_t reservation,
-                                 uint16_t fence, size_t len, uint64_t rem_addr)
-{
-    union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
-
-    wqe->hdr.opcode = ZHPE_HW_OPCODE_GETIMM | fence;
-    wqe->imm.len = len;
-    wqe->imm.rem_addr = rem_addr;
-}
-
-static inline void *zhpeq_xq_enqa(struct zhpeq_xq *zxq, int32_t reservation,
-                                  uint16_t fence, uint32_t dgcid,
-                                  uint32_t rspctxid)
-{
-    union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
-
-    wqe->hdr.opcode = ZHPE_HW_OPCODE_ENQA | fence;
-    wqe->enqa_alt.dgcid = dgcid << ZHPE_ENQA_GCID_SHIFT;
-    wqe->enqa_alt.rspctxid = rspctxid;
-
-    return wqe->enqa_alt.payload;
-}
-
-void zhpeq_atomic(struct zhpeq_xq *zxq, int32_t reservation, uint16_t fence,
-                  enum zhpeq_atomic_size datasize, enum zhpeq_atomic_op op,
-                  uint64_t rem_addr, const uint64_t *operands);
+/* Info/debugging */
 
 void zhpeq_print_xq_info(struct zhpeq_xq *zxq);
 
@@ -390,11 +421,6 @@ void zhpeq_print_xq_qcm(const char *func, uint line,
 void zhpeq_print_xq_wq(struct zhpeq_xq *zxq, int cnt);
 
 void zhpeq_print_xq_cq(struct zhpeq_xq *zxq, int cnt);
-
-int zhpeq_xq_get_addr(struct zhpeq_xq *zxq, void *sa, size_t *sa_len);
-
-int zhpeq_xq_xchg_addr(struct zhpeq_xq *zxq, int sock_fd,
-                       void *sa, size_t *sa_len);
 
 _EXTERN_C_END
 

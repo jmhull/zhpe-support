@@ -126,11 +126,13 @@ struct zhpeq_xqi {
     struct zhpeq_xq     pub;
     void                *backend_data;
     uint64_t            *free_bitmap;
-    int                 fd;
+    int                 dev_fd;
 };
 
 struct zhpeq_rqi {
     struct zhpeq_rq     pub;
+    int                 poll_fd;
+    int                 dev_fd;
 };
 
 static inline uint8_t cq_valid(uint32_t idx, uint32_t qmask)
@@ -211,6 +213,11 @@ union xdm_active {
 
 union rdm_rcv_tail {
     struct zhpe_rdm_rcv_queue_tail_toggle bits;
+    uint64_t            u64;
+};
+
+union rdm_active {
+    struct zhpe_rdm_active bits;
     uint64_t            u64;
 };
 
