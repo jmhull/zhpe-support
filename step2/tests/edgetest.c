@@ -212,7 +212,7 @@ static int do_mem_xchg(struct stuff *conn)
     return ret;
 }
 
-static inline int zxq_completions(struct zhpeq_xq *zxq)
+static int zxq_completions(struct zhpeq_xq *zxq)
 {
     ssize_t             ret = 0;
     int                 rc;
@@ -288,8 +288,7 @@ static int zxq_rma_op(struct zhpeq_xq *zxq, bool read, void *lcl_buf,
     return ret;
 }
 
-static inline void fill_buf(struct stuff *conn, struct checker_data *data,
-                            bool client)
+static void fill_buf(struct stuff *conn, struct checker_data *data, bool client)
 {
     uint8_t             fill;
 
@@ -301,8 +300,7 @@ static inline void fill_buf(struct stuff *conn, struct checker_data *data,
     memset(data->buf, fill, conn->args->buf_len);
 }
 
-static inline void ramp_buf(struct stuff *conn, struct checker_data *data,
-                            bool client)
+static void ramp_buf(struct stuff *conn, struct checker_data *data, bool client)
 {
     size_t              off;
     uint8_t             fill;
@@ -328,7 +326,7 @@ static inline void ramp_buf(struct stuff *conn, struct checker_data *data,
         data->buf[i] = v;
 }
 
-static inline void print_banner(struct checker_data *data, bool err)
+static void print_banner(struct checker_data *data, bool err)
 {
     const char          *fmt;
 
@@ -341,9 +339,9 @@ static inline void print_banner(struct checker_data *data, bool err)
                    data->op_msg.op_len);
 }
 
-static inline bool checker(struct checker_data *data,
-                           const char *label, bool imm, size_t off,
-                           uint8_t expected, uint8_t saw)
+static bool checker(struct checker_data *data,
+                    const char *label, bool imm, size_t off,
+                    uint8_t expected, uint8_t saw)
 {
 
     if (expected == saw)

@@ -135,11 +135,6 @@ struct zhpeq_rqi {
     int                 dev_fd;
 };
 
-static inline uint8_t cq_valid(uint32_t idx, uint32_t qmask)
-{
-    return ((idx & (qmask + 1)) ? 0 : ZHPE_HW_CQ_VALID);
-}
-
 #define ZHPEQ_MR_VALID_MASK \
     (ZHPE_MR_GET | ZHPE_MR_PUT | ZHPE_MR_SEND | ZHPE_MR_RECV | \
      ZHPE_MR_GET_REMOTE | ZHPE_MR_PUT_REMOTE | \

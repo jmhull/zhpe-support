@@ -43,6 +43,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <zhpeq_util.h>
+
 #include <zhpe_uapi.h>
 
 _EXTERN_C_BEG
@@ -190,7 +192,10 @@ struct zhpeq_rq {
     struct zhpeq_dom    *zdom;
     struct zhpe_rqinfo  rqinfo;
     volatile void       *qcm;
-    union zhpe_hw_rdm_entry *rq;
+    uint64_t            rx_timestamp_last;
+    uint32_t            rx_timestamp_head;
+    uint32_t            head;
+    uint32_t            head_commit;
 };
 
 static inline int zhpeq_rem_key_access(struct zhpeq_key_data *qkdata,
@@ -245,9 +250,6 @@ int zhpeq_xq_free(struct zhpeq_xq *zxq);
 int zhpeq_xq_backend_open(struct zhpeq_xq *zxq, void *sa);
 
 int zhpeq_xq_backend_close(struct zhpeq_xq *zxq, int open_idx);
-
-ssize_t zhpeq_xq_cq_read(struct zhpeq_xq *zxq,
-                         struct zhpeq_xq_cq_entry *entries, size_t n_entries);
 
 static inline uint64_t ioread64(const volatile void *addr)
 {
@@ -360,10 +362,10 @@ static inline void *zhpeq_xq_enqa(struct zhpeq_xq *zxq, int32_t reservation,
     union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
 
     wqe->hdr.opcode = ZHPE_HW_OPCODE_ENQA | op_flags;
-    wqe->enqa_alt.dgcid = dgcid << ZHPE_ENQA_GCID_SHIFT;
-    wqe->enqa_alt.rspctxid = rspctxid;
+    wqe->enqa.dgcid = dgcid;
+    wqe->enqa.rspctxid = rspctxid;
 
-    return wqe->enqa_alt.payload;
+    return wqe->enqa.payload;
 }
 
 void zhpeq_xq_atomic(struct zhpeq_xq *zxq, int32_t reservation,
@@ -371,10 +373,38 @@ void zhpeq_xq_atomic(struct zhpeq_xq *zxq, int32_t reservation,
                      enum zhpeq_atomic_op op, uint64_t rem_addr,
                      const uint64_t *operands);
 
+static inline bool zhpeq_cmp_valid(voltile void *qent, uint32_t qindex,
+                                   uint32_t qmask)
+{
+    uint                valid = atm_load_rlx((volatile uint8_t *)qent);
+    uint                shift = fls32(qmask);
+
+    return ((valid ^ (qindex >> shift)) & ZHPE_CMP_ENT_VALID_MASK);
+}
+
+ssize_t zhpeq_xq_cq_read(struct zhpeq_xq *zxq,
+                         struct zhpeq_xq_cq_entry *entries, size_t n_entries);
+
 int zhpeq_rq_free(struct zhpeq_rq *zrq);
 
 int zhpeq_rq_alloc(struct zhpeq_dom *zdom, int rx_qlen, int slice_mask,
                    struct zhpeq_rq **zrq_out);
+
+static inline struct zhpe_rdm_entry *zhpeq_rq_valid(struct zhpeq_rq *zrq)
+{
+    uint32_t            qmask = zrq->rqinfo.cmplq.ent - 1;
+    uint32_t            qindex = zrq->head;
+    struct zhpe_rdm_entry *rqe = &zrq->rq[qindex & qmask].entry;
+
+    if (zhpeq_cmp_valid(rqe, qindex, qmask)) {
+        zrq->head = qindex++;
+        return rqe;
+    }
+
+    return NULL;
+}
+
+bool zhpeq_rq_poll_check(struct zhpeq_rq *zrq, uint64_t poll_usec)
 
 int zhpeq_rq_get_addr(struct zhpeq_rq *zrq, void *sa, size_t *sa_len);
 

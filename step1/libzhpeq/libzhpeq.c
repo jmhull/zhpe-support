@@ -639,6 +639,36 @@ void zhpeq_xq_atomic(struct zhpeq_xq *zxq, int32_t reservation,
     }
 }
 
+ssize_t zhpeq_xq_cq_read(struct zhpeq_xq *zxq,
+                         struct zhpeq_xq_cq_entry *entries, size_t n_entries)
+{
+    ssize_t             ret = -EINVAL;
+    struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, pub);
+    volatile union zhpe_hw_cq_entry *cqe;
+    ssize_t             i;
+    uint32_t            qmask;
+
+    if (!zxq || !entries || n_entries > SSIZE_MAX)
+        goto done;
+
+    qmask = xqi->pub.xqinfo.cmplq.ent - 1;
+
+    for (i = 0; i < n_entries; i++) {
+        cqe = xqi->pub.cq + (xqi->pub.cq_head & qmask);
+        if (!zhpeq_cmp_valid(cqe, xqi->pub.cq_head, qmask))
+            break;
+        entries[i].z = cqe->entry;
+        entries[i].z.context = get_context(xqi, &entries[i].z);
+        zhpe_stats_stamp(zhpe_stats_subid(ZHPQ, 80), (uintptr_t)zxq,
+                         entries[i].z.index, (uintptr_t)entries[i].z.context);
+        xqi->pub.cq_head++;
+    }
+    ret = i;
+
+ done:
+    return ret;
+}
+
 int zhpeq_rq_free(struct zhpeq_rq *zrq)
 {
     int                 ret = -EINVAL;
@@ -755,6 +785,44 @@ int zhpeq_rq_alloc(struct zhpeq_dom *zdom, int rx_qlen, int slice_mask,
     return ret;
 }
 
+int zhpeq_rq_wait_check(struct zhpeq_rq *zrq, uint64_t poll_cycles)
+{
+    int                 ret = -EINVAL;
+    struct zhpeq_rqi    *rqi = container_of(zrq, struct zhpeq_rqi, pub);
+
+    /*
+     * To be called after zhpeq_rq_valid() fails; returns > 0
+     * if polling timeout is exhausted and queue is idle: time to wait
+     * for interrupt. Given that interrupts are shared, waiting for interrupt
+     * is really quite tricky. zhpeq_rq_wait(), below, will be correct only
+     * in the case there is a sin
+     *
+     * Timeout for polling starts/restarts on the first call to this function
+     * after a previously successful read.
+     */
+    if (!zrq)
+        goto done;
+
+    ret = zhpe_rq_poll_check(rqi, poll_cycles);
+ done:
+
+    return ret;
+}
+
+int zhpeq_rq_get_addr(struct zhpeq_rq *zrq, void *sa, size_t *sa_len)
+{
+    ssize_t             ret = -EINVAL;
+    struct zhpeq_rqi    *rqi = container_of(zrq, struct zhpeq_rqi, pub);
+
+    if (!zrq || !sa || !sa_len)
+        goto done;
+
+    ret = zhpe_rq_get_addr(rqi, sa, sa_len);
+ done:
+
+    return ret;
+}
+
 int zhpeq_rq_xchg_addr(struct zhpeq_rq *zrq, int sock_fd,
                        void *sa, size_t *sa_len)
 {
@@ -773,20 +841,6 @@ int zhpeq_rq_xchg_addr(struct zhpeq_rq *zrq, int sock_fd,
     if (ret < 0)
         goto done;
  done:
-    return ret;
-}
-
-int zhpeq_rq_get_addr(struct zhpeq_rq *zrq, void *sa, size_t *sa_len)
-{
-    ssize_t             ret = -EINVAL;
-    struct zhpeq_rqi    *rqi = container_of(zrq, struct zhpeq_rqi, pub);
-
-    if (!zrq || !sa || !sa_len)
-        goto done;
-
-    ret = zhpe_rq_get_addr(rqi, sa, sa_len);
- done:
-
     return ret;
 }
 
@@ -1019,37 +1073,6 @@ int zhpeq_mmap_commit(struct zhpeq_mmap_desc *zmdesc,
 
     ret = zhpe_mmap_commit(zmdesc, addr, length, fence, invalidate, wait);
 
-    return ret;
-}
-
-ssize_t zhpeq_xq_cq_read(struct zhpeq_xq *zxq,
-                         struct zhpeq_xq_cq_entry *entries, size_t n_entries)
-{
-    ssize_t             ret = -EINVAL;
-    struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, pub);
-    volatile union zhpe_hw_cq_entry *cqe;
-    ssize_t             i;
-    uint32_t            qmask;
-
-    if (!zxq || !entries || n_entries > SSIZE_MAX)
-        goto done;
-
-    qmask = xqi->pub.xqinfo.cmplq.ent - 1;
-
-    for (i = 0; i < n_entries; i++) {
-        cqe = xqi->pub.cq + (xqi->pub.cq_head & qmask);
-        if ((atm_load_rlx(&cqe->entry_alt.valid) & ZHPE_HW_CQ_VALID) !=
-            cq_valid(xqi->pub.cq_head, qmask))
-            break;
-        entries[i].z = cqe->entry;
-        entries[i].z.context = get_context(xqi, &entries[i].z);
-        zhpe_stats_stamp(zhpe_stats_subid(ZHPQ, 80), (uintptr_t)zxq,
-                         entries[i].z.index, (uintptr_t)entries[i].z.context);
-        xqi->pub.cq_head++;
-    }
-    ret = i;
-
- done:
     return ret;
 }
 

@@ -122,7 +122,7 @@ struct stuff {
     bool                allocated;
 };
 
-static inline uint64_t next_roff(struct stuff *conn, uint64_t cur)
+static uint64_t next_roff(struct stuff *conn, uint64_t cur)
 {
     /* Reserve first entry for source on client. */
     cur += conn->ring_entry_aligned;
@@ -285,7 +285,7 @@ static int do_mem_xchg(struct stuff *conn)
     return ret;
 }
 
-static inline int zxq_completions(struct zhpeq_xq *zxq)
+static int zxq_completions(struct zhpeq_xq *zxq)
 {
     ssize_t             ret = 0;
     ssize_t             i;

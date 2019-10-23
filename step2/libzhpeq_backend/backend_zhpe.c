@@ -484,6 +484,80 @@ static int zhpe_rq_alloc(struct zhpeq_rqi *rqi, int rqlen, int slice_mask)
     return ret;
 }
 
+static inline int zhpe_rq_head_update(struct zhpeq_rq *rq, bool check_idle)
+{
+    uint32_t            qmask = zrq->rqinfo.cmplq.ent - 1;
+    uint32_t            qhead = (zrq->head & qmask);
+    uint32_t            qtail;
+
+    /* Returns > 1 if queue is idle. */
+    zrq->head_commit = zrq_head;
+    qcmwrite64(qhead, zrq->qcm, ZHPE_RDM_QCM_RCV_QUEUE_HEAD_OFFSET);
+    if (!check_idle)
+        return 0;
+    qtail = (qcmread64(zrq->qcm, ZHPE_RDM_QCM_RCV_QUEUE_TAIL_TOGGLE_OFFSET) &
+             qmask);
+
+    return (qhead == qtail ? 1 : 0);
+}
+
+static int zhpe_rq_wait_check(struct zhpeq_rqi *rqi, uint64_t poll_cycles)
+{
+    int                 ret = 0;
+    uint64_t            now = get_cycles();
+    uint64_t            gbl_int;
+    uint64_t            lcl_int;
+
+    now = get_cycles();
+    if (zrq->rx_poll_start_head != zrq->head) {
+        zrq->rx_poll_start_head = zrq->head;
+        zrq->rx_poll_start = now;
+        (void)zhpe_rq_head_update(zrq, false);
+        goto done;
+    }
+    if (now - zrq->poll_start < poll_cycles)
+        goto done;
+    return zhpe_rq_head_update(rqi, true);
+}
+
+static int zhpe_rq_wait(struct zhpeq_rqi *rqi, uint64_t wait_check)
+{
+    int                 ret = 0;
+    uint64_t            now = get_cycles();
+    uint64_t            gbl_int;
+    uint64_t            lcl_int;
+
+    now = get_cycles();
+    if (zrq->rx_poll_start_head != zrq->head) {
+        zrq->rx_poll_start_head = zrq->head;
+        zrq->rx_poll_start = now;
+        (void)zhpe_rq_head_update(zrq, false);
+        goto done;
+    }
+    if (now - zrq->poll_start < poll_cycles)
+        goto done;
+    return zhpe_rq_head_update(rqi, true);
+}
+
+struct zhpeq_epoll_int {
+    
+    uint32_t            irq_vector;
+    int                 fd;
+    struct zhpeq_rq     *rq[0];
+};
+
+
+
+struct zhpeq_epoll_slice {
+    uint32_t            n_ints;
+    struct zhpe_epoll_int ints[0];
+};
+
+static int zhpe_epoll(void)
+{
+
+}
+
 static int compare_qkdata(const void *key1, const void *key2)
 {
     int                 ret;

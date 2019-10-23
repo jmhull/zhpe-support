@@ -37,29 +37,18 @@
 #include <zhpeq.h>
 #include <zhpeq_util.h>
 
-#include <sys/queue.h>
-
 #define BACKLOG         (10)
 #ifdef DEBUG
 #define TIMEOUT         (-1)
 #else
 #define TIMEOUT         (10000)
 #endif
-#define WARMUP_MIN      (1024)
 #define ZXQ_LEN         (1023)
 
 struct cli_wire_msg {
-    uint64_t            tx_size;
-    uint64_t            rx_size;
+    uint64_t            ring_entries;
+    uint64_t            qlen;
     bool                once_mode;
-};
-
-struct rx_queue {
-    STAILQ_ENTRY(rx_queue) list;
-    union {
-        void            *buf;
-        uint64_t        idx;
-    };
 };
 
 enum {
@@ -69,56 +58,38 @@ enum {
     TX_LAST,
 };
 
-STAILQ_HEAD(rx_queue_head, rx_queue);
-
 struct args {
     const char          *node;
     const char          *service;
-    uint64_t            bufaddr;
-    uint64_t            ring_entry_len;
     uint64_t            ring_entries;
     uint64_t            ring_ops;
-    uint64_t            tx_avail;
-    uint64_t            warmup;
-    bool                aligned_mode;
-    bool                copy_mode;
+    uint64_t            qlen;
+    uint64_t            delay;
     bool                once_mode;
     bool                seconds_mode;
-    bool                unidir_mode;
 };
 
 struct stuff {
     const struct args   *args;
     struct zhpeq_dom    *zdom;
     struct zhpeq_xq     *zxq;
-    struct zhpeq_key_data *zxq_local_kdata;
-    struct zhpeq_key_data *zxq_remote_kdata;
-    uint64_t            zxq_local_tx_zaddr;
-    uint64_t            zxq_remote_rx_zaddr;
+    struct zhpeq_rq     *zrq;
     int                 sock_fd;
-    void                *tx_addr;
-    void                *rx_addr;
-    uint64_t            *ring_timestamps;
-    struct rx_queue     *rx_rcv;
-    void                *rx_data;
-    size_t              ring_entry_aligned;
     size_t              ring_ops;
-    size_t              ring_warmup;
-    size_t              ring_end_off;
-    size_t              tx_avail;
+    size_t              qlen;
+    uint64_t            tx_seq;
+    uint64_t            tx_cmp;
+    uint64_t            tx_cmp_oos;
+    uint64_t            rx_seq;
+    uint64_t            rx_seq_oos;
     int                 open_idx;
     bool                allocated;
 };
 
-static inline uint64_t next_roff(struct stuff *conn, uint64_t cur)
-{
-    /* Reserve first entry for source on client. */
-    cur += conn->ring_entry_aligned;
-    if (cur >= conn->ring_end_off)
-        cur = 0;
-
-    return cur;
-}
+struct enqa_msg {
+    uint64_t            tx_seq;
+    uint64_t            tx_stamp;
+};
 
 static void stuff_free(struct stuff *stuff)
 {
@@ -131,6 +102,7 @@ static void stuff_free(struct stuff *stuff)
     }
     if (stuff->open_idx != -1)
         zhpeq_xq_backend_close(stuff->zxq, stuff->open_idx);
+    zhpeq_rq_free(stuff->zrq);
     zhpeq_xq_free(stuff->zxq);
     zhpeq_domain_free(stuff->zdom);
 
@@ -145,231 +117,62 @@ static void stuff_free(struct stuff *stuff)
         free(stuff);
 }
 
-static int do_mem_setup(struct stuff *conn)
-{
-    int                 ret = -EEXIST;
-    const struct args   *args = conn->args;
-    size_t              mask = L1_CACHELINE - 1;
-    size_t              req;
-    size_t              off;
-
-    if (args->aligned_mode)
-        conn->ring_entry_aligned = (args->ring_entry_len + mask) & ~mask;
-    else
-        conn->ring_entry_aligned = args->ring_entry_len;
-
-    /* Size of an array of entries plus a tail index. */
-    req = conn->ring_entry_aligned * args->ring_entries;
-    off = conn->ring_end_off = req;
-    req *= 2;
-    conn->tx_addr = mmap((void *)(uintptr_t)args->bufaddr, req,
-                         PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED,
-                         -1 , 0);
-    if (conn->tx_addr == MAP_FAILED) {
-         conn->tx_addr = NULL;
-         print_func_errn(__func__, __LINE__, "mmap", req, false, ret);
-         goto done;
-    }
-    memset(conn->tx_addr, TX_NONE, req);
-    conn->rx_addr = VPTR(conn->tx_addr, off);
-
-    ret = zhpeq_mr_reg(conn->zdom, conn->tx_addr, req,
-                       (ZHPEQ_MR_GET | ZHPEQ_MR_PUT |
-                        ZHPEQ_MR_GET_REMOTE | ZHPEQ_MR_PUT_REMOTE),
-                       &conn->zxq_local_kdata);
-    if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_mr_reg", "", ret);
-        goto done;
-    }
-    ret = zhpeq_lcl_key_access(conn->zxq_local_kdata, conn->tx_addr,
-                               req, 0, &conn->zxq_local_tx_zaddr);
-    if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_lcl_key_access",
-                       "", ret);
-        goto done;
-    }
-
-    req = sizeof(*conn->ring_timestamps) * args->ring_entries;
-    ret = -posix_memalign((void **)&conn->ring_timestamps, page_size, req);
-    if (ret < 0) {
-        conn->ring_timestamps = NULL;
-        print_func_errn(__func__, __LINE__, "posix_memalign", true,
-                        req, ret);
-        goto done;
-    }
-
-    if (!args->copy_mode)
-        goto done;
-
-    req = sizeof(*conn->rx_rcv) * args->ring_entries + conn->ring_end_off;
-    ret = -posix_memalign((void **)&conn->rx_rcv, page_size, req);
-    if (ret < 0) {
-        conn->rx_rcv = NULL;
-        print_func_errn(__func__, __LINE__, "posix_memalign", true,
-                        req, ret);
-        goto done;
-    }
-    conn->rx_data = (void *)(conn->rx_rcv + args->ring_entries);
-
- done:
-    return ret;
-}
-
-static int do_mem_xchg(struct stuff *conn)
-{
-    int                 ret;
-    char                blob[ZHPEQ_KEY_BLOB_MAX];
-    struct mem_wire_msg mem_msg;
-    size_t              blob_len;
-
-    blob_len = sizeof(blob);
-    ret = zhpeq_qkdata_export(conn->zxq_local_kdata, blob, &blob_len);
-    if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_qkdata_export", "", ret);
-        goto done;
-    }
-
-    mem_msg.zxq_remote_rx_addr = htobe64((uintptr_t)conn->rx_addr);
-
-    ret = sock_send_blob(conn->sock_fd, &mem_msg, sizeof(mem_msg));
-    if (ret < 0)
-        goto done;
-    ret = sock_send_blob(conn->sock_fd, blob, blob_len);
-    if (ret < 0)
-        goto done;
-    ret = sock_recv_fixed_blob(conn->sock_fd, &mem_msg, sizeof(mem_msg));
-    if (ret < 0)
-        goto done;
-    ret = sock_recv_fixed_blob(conn->sock_fd, blob, blob_len);
-    if (ret < 0)
-        goto done;
-
-    mem_msg.zxq_remote_rx_addr = be64toh(mem_msg.zxq_remote_rx_addr);
-
-    ret = zhpeq_qkdata_import(conn->zdom, conn->open_idx, blob, blob_len,
-                              &conn->zxq_remote_kdata);
-    if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_qkdata_import", "", ret);
-        goto done;
-    }
-    ret = zhpeq_zmmu_reg(conn->zxq_remote_kdata);
-    if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_zmmu_reg", "", ret);
-        goto done;
-    }
-
-    ret = zhpeq_rem_key_access(conn->zxq_remote_kdata,
-                               mem_msg.zxq_remote_rx_addr, conn->ring_end_off,
-                               0, &conn->zxq_remote_rx_zaddr);
-    if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_rem_key_access",
-                       "", ret);
-        goto done;
-    }
-
- done:
-
-    return ret;
-}
-
-static inline int zxq_completions(struct zhpeq_xq *zxq)
-{
-    ssize_t             ret = 0;
-    ssize_t             i;
-    struct zhpeq_xq_cq_entry zxq_comp[TX_WINDOW];
-
-    ret = zhpeq_xq_cq_read(zxq, zxq_comp, ARRAY_SIZE(zxq_comp));
-    if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_xq_cq_read", "", ret);
-        goto done;
-    }
-    for (i = 0; i < ret; i++) {
-        if (zxq_comp[i].z.status != ZHPEQ_XQ_CQ_STATUS_SUCCESS) {
-            print_err("%s,%u:index 0x%x status 0x%x\n", __func__, __LINE__,
-                      zxq_comp[i].z.index, zxq_comp[i].z.status);
-            ret = -EIO;
-            break;
-        }
-    }
-
- done:
-
-    return ret;
-}
-
-static void random_rx_rcv(struct stuff *conn, struct rx_queue_head *rx_head)
-{
-    const struct args   *args = conn->args;
-    struct rx_queue     *tp;
-    struct rx_queue     *rp;
-    struct rx_queue     *cp;
-    uint64_t            t;
-    uint64_t            r;
-
-    /* Partition shuffle the list. */
-
-    for (t = 0; t < args->ring_entries; t++) {
-        tp = conn->rx_rcv + t;
-        tp->idx = t;
-    }
-
-    for (t = args->ring_entries; t > 0; t--) {
-        tp = conn->rx_rcv + t - 1;
-        r = random() * t / ((uint64_t)RAND_MAX + 1);
-        rp = conn->rx_rcv + r;
-
-        cp = conn->rx_rcv + rp->idx;
-        rp->idx = tp->idx;
-        STAILQ_INSERT_TAIL(rx_head, cp, list);
-    }
-
-    /* Set buf to equivalent slot in rx_data. */
-    t = 0;
-    STAILQ_FOREACH(tp, rx_head, list) {
-        tp->buf = VPTR(conn->rx_data,
-                       (tp - conn->rx_rcv) * args->ring_entry_len);
-        t++;
-    }
-    if (t != args->ring_entries) {
-        print_err("list contains %lu/%lu entries\n",
-                  t, args->ring_entries);
-    }
-}
-
-static int zxq_write(struct zhpeq_xq *zxq, const void *buf, uint64_t lcl_zaddr,
-                     size_t len, uint64_t rem_zaddr)
+static int conn_enqa(struct stuff *conn)
 {
     int32_t             ret;
+    uint64_t            tx_seq = conn->tx_seq++;
+    struct enqa_msg     *msg;
 
-    ret = zhpeq_xq_reserve(zxq, NULL);
+    ret = zhpeq_xq_reserve(zxq, TO_PTR(seq));
     if (ret < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_xq_reserve", "", ret);
         goto done;
     }
-    if (len <= ZHPEQ_IMM_MAX)
-        zhpeq_xq_puti(zxq, ret, false, buf, len, rem_zaddr);
-    else
-        zhpeq_xq_put(zxq, ret, false, lcl_zaddr, len, rem_zaddr);
-    zhpeq_xq_insert(zxq, ret);
+    msg = zhpeq_xq_enqa(conn->zxq, ret, 0, conn->dgcid, conn->rspctxid);
+    msg->tx_seq = htobe64(tx_seq);
+    msg->tx_stamp = htobe64(get_cycles(NULL));
+    zhpeq_xq_insert(zxq, ret, false);
     zhpeq_xq_commit(zxq);
  done:
 
     return ret;
 }
 
-static ssize_t do_progress(struct zhpeq_xq *zxq, size_t *tx_cmp)
+static ssize_t conn_completions(struct stuff *conn)
 {
     ssize_t             ret = 0;
-    ssize_t             rc;
+    ssize_t             i;
+    uint64_t            tx_seq;
+    struct zhpeq_xq_cq_entry zxq_comp[64];
 
-    rc = zxq_completions(zxq);
-    if (ret >= 0) {
-        if (tx_cmp)
-            *tx_cmp += rc;
-        else
-            assert(!rc);
-    } else
-        ret = rc;
+    for (;;) {
+        ret = zhpeq_xq_cq_read(zxq, zxq_comp, ARRAY_SIZE(zxq_comp));
+        if (ret < 0) {
+            print_func_err(__func__, __LINE__, "zhpeq_xq_cq_read", "", ret);
+            goto done;
+        }
+        if (!ret)
+            break;
+        for (i = 0; i < ret; i++) {
+            if (zxq_comp[i].z.status != ZHPEQ_XQ_CQ_STATUS_SUCCESS) {
+                print_err("%s,%u:index 0x%x status 0x%x\n", __func__, __LINE__,
+                          zxq_comp[i].z.index, zxq_comp[i].z.status);
+                ret = -EIO;
+                goto done;
+            }
+            tx_seq = (uintptr_t)zhq_comp[i].context;
+            if (tx_seq != conn->tx_cmp) {
+                conn->tx_cmp_oos++;
+                if (tx_seq > conn->tx_cmp) {
+                    conn->tx_cmp_oos_max = max(conn->tx_cmp_oos_max,
+                                               tx_seq - tx_cmp);
+                }
+            }
+            conn->tx_cmp++;
+        }
+    }
+
+ done:
 
     return ret;
 }
@@ -750,15 +553,22 @@ int do_zxq_setup(struct stuff *conn)
         print_func_err(__func__, __LINE__, "zhpeq_domain_alloc", "", ret);
         goto done;
     }
-    /* Allocate zxqueue. */
+    /* Allocate zqueues. */
     ret = zhpeq_xq_alloc(conn->zdom, conn->tx_avail + 1, conn->tx_avail + 1,
                          0, 0, 0,  &conn->zxq);
     if (ret < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_xq_qalloc", "", ret);
         goto done;
     }
+
+    ret = zhpeq_rq_alloc(conn->zdom, 1, 0, &conn->zrq);
+    if (ret < 0) {
+        print_func_err(__func__, __LINE__, "zhpeq_rq_qalloc", "", ret);
+        goto done;
+    }
+
     /* Get address index. */
-    ret = zhpeq_xq_xchg_addr(conn->zxq, conn->sock_fd, &sa, &sa_len);
+    ret = zhpeq_rq_xchg_addr(conn->zrq, conn->sock_fd, &sa, &sa_len);
     if (ret < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_xq_xchg_addr",
                        "", ret);

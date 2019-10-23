@@ -247,6 +247,29 @@ static inline void nop(void)
     asm volatile("nop");
 }
 
+/*
+ * According to the kernel source, in 64-bit mode, these work without
+ * checking for zero on Intel, despite the documentation. AMD has documented
+ * the desired behavior.
+ */
+static inline int fls32(uint32_t v)
+{
+    int                 ret = -1;
+
+    asm("bsrl %1,%0" : "+r" (ret) : "rm" (v));
+
+    return ret + 1;
+}
+
+static inline int ffs32(uint32_t v)
+{
+    int                 ret = -1;
+
+    asm("bsfl %1,%0" : "+r" (ret) : "rm" (v));
+
+    return ret + 1;
+}
+
 static inline int fls64(uint64_t v)
 {
     int                 ret = -1;
@@ -595,12 +618,17 @@ extern struct zhpeu_init_time *zhpeu_init_time;
 #define page_size       (zhpeu_init_time->pagesz)
 
 #define NSEC_PER_SEC    (1000000000UL)
-#define NSEC_PER_USEC   (1000000UL)
+#define USEC_PER_SEC    (1000000UL)
 
 static inline double cycles_to_usec(uint64_t delta, uint64_t loops)
 {
-    return (((double)delta * NSEC_PER_USEC) /
+    return (((double)delta * USEC_PER_SEC) /
             ((double)zhpeu_init_time->freq * loops));
+}
+
+static inline uint64_t usec_to_cycles(uint64_t usec)
+{
+    return (usec * zhpeu_init_time->freq / USEC_PER_SEC);
 }
 
 static inline uint64_t get_cycles(volatile uint32_t *cpup)
@@ -618,7 +646,7 @@ static inline void clflush_range(const void *addr, size_t length, bool fence)
     zhpeu_init_time->clflush_range(addr, length, fence);
 }
 
-static inline void clwb_range(const void *addr, size_t length,  bool fence)
+static inline void clwb_range(const void *addr, size_t length, bool fence)
 {
     zhpeu_init_time->clwb_range(addr, length, fence);
 }
