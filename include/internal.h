@@ -118,19 +118,20 @@ struct zhpeq_ht {
 } INT64_ALIGNED;
 
 struct zhpeq_domi {
-    struct zhpeq_dom    pub;
+    struct zhpeq_dom    zdom;
     void                *backend_data;
 };
 
 struct zhpeq_xqi {
-    struct zhpeq_xq     pub;
+    struct zhpeq_xq     zxq;
     void                *backend_data;
     uint64_t            *free_bitmap;
     int                 dev_fd;
 };
 
 struct zhpeq_rqi {
-    struct zhpeq_rq     pub;
+    struct zhpeq_rq     zrq;
+    struct zhpeq_rqi    *next;
     int                 poll_fd;
     int                 dev_fd;
 };

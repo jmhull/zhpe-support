@@ -145,7 +145,8 @@ do {                                                            \
     int                 __ret = 0;                              \
                                                                 \
     if ((_fd) >= 0) {                                           \
-        __ret = close(_fd);                                     \
+        if (close(_fd) == -1)                                   \
+            __ret = -errno;                                     \
         (_fd) = -1;                                             \
     }                                                           \
     __ret;                                                      \
@@ -201,7 +202,7 @@ static_assert(INET6_ADDRSTRLEN >= ZHPE_ADDRSTRLEN, "ZHPE_ADDRSTRLEN");
 #undef _BARRIER_DEFINED
 #endif
 
-#if defined(__x86_32__) || defined( __x86_64__)
+#ifdef __x86_64__
 
 #define _BARRIER_DEFINED
 
@@ -314,6 +315,11 @@ static inline int ffs64(uint64_t v)
 #endif
 
 #endif /* __GNUC__ */
+
+static inline int zhpeu_update_error(int old, int new)
+{
+    return ((unlikely(new < 0) && old >= 0) ? new : old);
+}
 
 void zhpeu_util_init(char *argv0, int default_log_level, bool use_syslog);
 void zhpeu_print_dbg(const char *fmt, ...) PRINTF_ARGS(1, 2);
@@ -468,14 +474,7 @@ char *zhpeu_sockaddr_str(const void *addr);
 #define atm_inc(_p)     atm_add(_p, 1)
 #define atm_dec(_p)     atm_sub(_p, 1)
 
-/* Two simple atomic lists:
- * "lifo" for free lists and a "snatch" list with multiple-producers and
- * one consumer that snatches the entire list for processing at once: this
- * avoids most of the complexities with enqeue and dequeue around A-B-A, but
- * the tail must be handled carefully.
- */
-
-struct zhpeu_atm_list_ptr {
+struct zhpeu_atm_lifo_head {
     struct zhpeu_atm_list_next *ptr;
     uintptr_t            seq;
 } INT128_ALIGNED;
@@ -484,94 +483,11 @@ struct zhpeu_atm_list_next {
     struct zhpeu_atm_list_next *next;
 } INT64_ALIGNED;
 
-struct zhpeu_atm_snatch_head {
-    struct zhpeu_atm_list_next *head;
-    struct zhpeu_atm_list_next *tail;
-} INT128_ALIGNED;
-
-#define ZHPEU_ATM_LIST_END      ((struct zhpeu_atm_list_next *)(intptr_t)-1)
-
-static inline void zhpeu_atm_snatch_insert(struct zhpeu_atm_snatch_head *head,
-                                           struct zhpeu_atm_list_next *new)
-{
-    struct zhpeu_atm_snatch_head oldh;
-    struct zhpeu_atm_snatch_head newh;
-    struct zhpeu_atm_list_next oldn;
-
-    new->next = NULL;
-    for (oldh = atm_load_rlx(head);;) {
-        if (oldh.head) {
-            newh.head = oldh.head;
-            /* Try to link new into list. */
-            oldn.next = NULL;
-            if (!atm_cmpxchg(&oldh.tail->next, &oldn, new)) {
-                /* Failed: advance the tail ourselves and retry. */
-                newh.tail = oldn.next;
-                if (atm_cmpxchg(head, &oldh, newh))
-                    oldh = newh;
-                continue;
-            }
-            /* Try to update the head; succeed or fail, we're done.
-             * If we fail, it is up to the other threads to deal with it.
-             */
-            newh.tail = new;
-            atm_cmpxchg(head, &oldh, newh);
-            break;
-        }
-        /* List was empty. */
-        newh.head = new;
-        newh.tail = new;
-        if (atm_cmpxchg(head, &oldh, newh))
-            break;
-    }
-}
-
-static inline void zhpeu_atm_snatch_list(struct zhpeu_atm_snatch_head *head,
-                                         struct zhpeu_atm_snatch_head *oldh)
-{
-    struct zhpeu_atm_snatch_head newh;
-    struct zhpeu_atm_list_next oldn;
-
-    for (*oldh = atm_load_rlx(head);;) {
-        if (!oldh->head)
-            return;
-        newh.head = NULL;
-        newh.tail = NULL;
-        if (atm_cmpxchg(head, oldh, newh))
-            break;
-    }
-    /*
-     * Worst case: another thread has copied the head and went to sleep
-     * before updating the next pointer and will wake up at some point far
-     * in the future and do so. Or another thread could have successfully
-     * updated next, but the tail update failed. We update the final next
-     * pointer with ZHPEU_ATM_LIST_END to deal with some of this, but the
-     * potential for a thread lurking demands a more structural
-     * solution. The fifo list will also use ZHPEU_ATM_LIST_END, instead of
-     * NULL and the assumption is that items will be bounced between
-     * snatch lists and fifos as free lists; items will never be returned
-     * to a general allocation pool unless some broader guarantee that
-     * it is safe to do so.
-     */
-    for (;;) {
-        oldn.next = NULL;
-        if (atm_cmpxchg(&oldh->tail->next, &oldn, ZHPEU_ATM_LIST_END))
-            break;
-        oldh->tail = oldn.next;
-    }
-}
-
-static inline void zhpeu_atm_fifo_init(struct zhpeu_atm_list_ptr *head)
-{
-    head->ptr = ZHPEU_ATM_LIST_END;
-    head->seq = 0;
-}
-
-static inline void zhpeu_atm_fifo_push(struct zhpeu_atm_list_ptr *head,
+static inline void zhpeu_atm_lifo_push(struct zhpeu_atm_lifo_head *head,
                                        struct zhpeu_atm_list_next *new)
 {
-    struct zhpeu_atm_list_ptr oldh;
-    struct zhpeu_atm_list_ptr newh;
+    struct zhpeu_atm_lifo_head oldh;
+    struct zhpeu_atm_lifo_head newh;
 
     newh.ptr = new;
     for (oldh = atm_load_rlx(head);;) {
@@ -583,18 +499,16 @@ static inline void zhpeu_atm_fifo_push(struct zhpeu_atm_list_ptr *head,
 }
 
 static inline struct zhpeu_atm_list_next *
-zhpeu_atm_fifo_pop(struct zhpeu_atm_list_ptr *head)
+zhpeu_atm_lifo_pop(struct zhpeu_atm_lifo_head *head)
 {
     struct zhpeu_atm_list_next *ret;
-    struct zhpeu_atm_list_ptr oldh;
-    struct zhpeu_atm_list_ptr newh;
+    struct zhpeu_atm_lifo_head oldh;
+    struct zhpeu_atm_lifo_head newh;
 
     for (oldh = atm_load_rlx(head);;) {
         ret = oldh.ptr;
-        if (ret == ZHPEU_ATM_LIST_END) {
-            ret = NULL;
+        if (!ret)
             break;
-        }
         newh.ptr = ret->next;
         newh.seq = oldh.seq + 1;
         if (atm_cmpxchg(head, &oldh, newh))
@@ -759,11 +673,13 @@ char *zhpeu_get_cpuinfo_val(FILE *fp, char *buf, size_t buf_size,
     zhpeu_call_null(zhpeu_fatal, realloc, void *, __VA_ARGS__)
 #define xcalloc(...)                                            \
     zhpeu_call_null(zhpeu_fatal, calloc, void *, __VA_ARGS__)
+#define xasprintf(...)                                          \
+    zhpeu_syscall(zhpeu_fatal, asprintf, __VA_ARGS__)
 
 /* Keep _GNU_SOURCE out of the headers. */
 char *zhpeu_asprintf(const char *fmt, ...) PRINTF_ARGS(1, 2);
-#define xasprintf(...)                                          \
-    zhpeu_syscall(zhpeu_fatal, zhpeu_asprintf, __VA_ARGS__)
+#define _zhpeu_asprintf(...)                                    \
+    zhpeu_call_null(zhpeu_err, zhpeu_asprintf, char *,  __VA_ARGS__)
 
 void zhpeu_yield(void);
 #define yield()         zhpeu_yield()
@@ -876,9 +792,9 @@ static inline void *calloc_cachealigned(size_t nmemb, size_t size)
 #define _malloc(...)                                            \
     zhpeu_call_null(zhpeu_err, malloc, void *, __VA_ARGS__)
 #define _realloc(...)                                           \
-    zhpeu_call_null(zhpeu_err, xrealloc, void *, __VA_ARGS__)
+    zhpeu_call_null(zhpeu_err, realloc, void *, __VA_ARGS__)
 #define _calloc(...)                                            \
-    zhpeu_call_null(zhpeu_err, xcalloc, void *, __VA_ARGS__)
+    zhpeu_call_null(zhpeu_err, calloc, void *, __VA_ARGS__)
 #define _asprintf(...)                                          \
     zhpeu_syscall(zhpeu_err, asprintf, __VA_ARGS__)
 #define _malloc_aligned(...)                                    \

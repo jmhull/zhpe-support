@@ -176,7 +176,7 @@ static int do_mem_setup(struct stuff *conn)
 static int do_mem_xchg(struct stuff *conn)
 {
     int                 ret;
-    char                blob[ZHPEQ_KEY_BLOB_MAX];
+    char                blob[ZHPEQ_MAX_KEY_BLOB];
     size_t              blob_len;
 
     blob_len = sizeof(blob);
@@ -438,7 +438,7 @@ static int do_server_ops(struct stuff *conn)
         data.op_msg.op_len = be64toh(data.op_msg.op_len);
         if (!data.op_msg.op_len)
             goto done;
-        if (data.op_msg.op_len <= ZHPEQ_IMM_MAX && conn->args->imm) {
+        if (data.op_msg.op_len <= ZHPEQ_MAX_IMM && conn->args->imm) {
             ret = do_server_1op(conn, &data, true);
             if (ret < 0)
                 goto done;
@@ -535,7 +535,7 @@ static int do_client_op(struct stuff *conn, size_t coff, size_t soff,
     data.op_msg.soff = soff;
     data.op_msg.op_len = op_len;
 
-    if (data.op_msg.op_len <= ZHPEQ_IMM_MAX && conn->args->imm) {
+    if (data.op_msg.op_len <= ZHPEQ_MAX_IMM && conn->args->imm) {
         ret = do_client_1op(conn, &data, true, data_err);
         if (ret < 0)
             goto done;

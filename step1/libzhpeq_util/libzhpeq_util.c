@@ -55,13 +55,13 @@ static const char *cpuinfo_delim = " \t\n";
 struct zhpeu_init_time  *zhpeu_init_time;
 static struct zhpeu_init_time  init_time;
 
-static struct zhpeu_atm_list_ptr atm_dummy;
+static struct zhpeu_atm_lifo_head atm_dummy;
 
 static void __attribute__((constructor)) lib_init(void)
 {
     long                rcl;
-    struct zhpeu_atm_list_ptr oldh;
-    struct zhpeu_atm_list_ptr newh;
+    struct zhpeu_atm_lifo_head oldh;
+    struct zhpeu_atm_lifo_head newh;
     struct zhpeu_init_time *oldi;
 
     /*

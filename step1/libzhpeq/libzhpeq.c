@@ -34,6 +34,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#define _GNU_SOURCE
 #include <internal.h>
 
 #include <cpuid.h>
@@ -46,7 +47,12 @@ static_assert(sizeof(union zhpe_hw_wq_entry) ==  ZHPE_ENTRY_LEN,
               "zhpe_hw_wq_entry");
 static_assert(sizeof(union zhpe_hw_cq_entry) ==  ZHPE_ENTRY_LEN,
               "zhpe_hw_cq_entry");
+static_assert(sizeof(union zhpe_hw_rdm_entry) ==  ZHPE_ENTRY_LEN,
+              "zhpe_hw_cq_entry");
 static_assert(__BYTE_ORDER == __LITTLE_ENDIAN, "Only little endian supported");
+#ifndef __x86_64__
+#error Only x86-64 supported
+#endif
 
 /* Set to 1 to dump qkdata when registered/exported/imported/freed. */
 #define QKDATA_DUMP     (0)
@@ -280,13 +286,15 @@ int zhpeq_query_attr(struct zhpeq_attr *attr)
 int zhpeq_domain_free(struct zhpeq_dom *zdom)
 {
     int                 ret = -EINVAL;
-    struct zhpeq_domi   *zdomi = container_of(zdom, struct zhpeq_domi, pub);
+    struct zhpeq_domi   *zdomi = container_of(zdom, struct zhpeq_domi, zdom);
 
     if (!zdom)
         goto done;
+    /* Assume the container_of() confuses the compiler about aliases. */
+    zdom = &zdomi->zdom;
 
     ret = zhpe_domain_free(zdomi);
-    free(zdom);
+    free(zdomi);
 
  done:
     return ret;
@@ -310,9 +318,9 @@ int zhpeq_domain_alloc(struct zhpeq_dom **zdom_out)
 
  done:
     if (ret >= 0)
-        *zdom_out = &zdomi->pub;
+        *zdom_out = &zdomi->zdom;
     else
-        (void)zhpeq_domain_free(&zdomi->pub);
+        (void)zhpeq_domain_free(&zdomi->zdom);
 
     return ret;
 }
@@ -320,17 +328,20 @@ int zhpeq_domain_alloc(struct zhpeq_dom **zdom_out)
 int zhpeq_xq_free(struct zhpeq_xq *zxq)
 {
     int                 ret = -EINVAL;
-    struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, pub);
+    struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, zxq);
     int                 rc;
     union xdm_active    active;
 
     if (!zxq)
         goto done;
+    /* Assume the container_of() confuses the compiler about aliases. */
+    zxq = &xqi->zxq;
+
     /* Stop the queue. */
-    if (xqi->pub.qcm) {
-        qcmwrite64(1, xqi->pub.qcm, ZHPE_XDM_QCM_STOP_OFFSET);
+    if (zxq->qcm) {
+        qcmwrite64(1, zxq->qcm, ZHPE_XDM_QCM_STOP_OFFSET);
         for (;;) {
-            active.u64 = qcmread64(xqi->pub.qcm,
+            active.u64 = qcmread64(zxq->qcm,
                                    ZHPE_XDM_QCM_ACTIVE_STATUS_ERROR_OFFSET);
             if (!active.bits.active)
                 break;
@@ -341,26 +352,22 @@ int zhpeq_xq_free(struct zhpeq_xq *zxq)
 
     ret = 0;
     /* Unmap qcm, wq, and cq. */
-    rc = _zhpeu_munmap((void *)xqi->pub.qcm, xqi->pub.xqinfo.qcm.size);
-    if (ret >= 0 && rc < 0)
-        ret = rc;
-    rc = _zhpeu_munmap(xqi->pub.wq, xqi->pub.xqinfo.cmdq.size);
-    if (ret >= 0 && rc < 0)
-        ret = rc;
-    rc = _zhpeu_munmap((void *)xqi->pub.cq, xqi->pub.xqinfo.cmplq.size);
-    if (ret >= 0 && rc < 0)
-        ret = rc;
+    rc = _zhpeu_munmap((void *)zxq->qcm, zxq->xqinfo.qcm.size);
+    ret = zhpeu_update_error(ret, rc);
+    rc = _zhpeu_munmap(zxq->wq, zxq->xqinfo.cmdq.size);
+    ret = zhpeu_update_error(ret, rc);
+    rc = _zhpeu_munmap((void *)zxq->cq, zxq->xqinfo.cmplq.size);
+    ret = zhpeu_update_error(ret, rc);
 
     /* Call the driver to free the queue. */
-    if (xqi->pub.xqinfo.qcm.size) {
+    if (zxq->xqinfo.qcm.size) {
         rc = zhpe_xq_free(xqi);
-        if (ret >= 0 && rc < 0)
-            ret = rc;
+        ret = zhpeu_update_error(ret, rc);
     }
 
     /* Free queue memory. */
-    free(xqi->pub.ctx);
-    free(xqi->pub.mem);
+    free(zxq->ctx);
+    free(zxq->mem);
     free(xqi->free_bitmap);
     free(xqi);
 
@@ -377,6 +384,7 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
     union xdm_cmp_tail  tail = {
         .bits.toggle_valid = 1,
     };
+    struct zhpeq_xq     *zxq;
     int                 flags;
     size_t              i;
     size_t              e;
@@ -388,8 +396,8 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
     if (!zdom || cmp_qlen < cmd_qlen ||
         cmd_qlen < 1 || cmd_qlen > b_attr.z.max_tx_qlen ||
         cmp_qlen < 1 || cmp_qlen > b_attr.z.max_tx_qlen ||
-        traffic_class < 0 || traffic_class > ZHPEQ_TC_MAX ||
-        priority < 0 || priority > ZHPEQ_PRI_MAX ||
+        traffic_class < 0 || traffic_class > ZHPEQ_MAX_TC ||
+        priority < 0 || priority > ZHPEQ_MAX_PRI ||
         (slice_mask & ~(ALL_SLICES | SLICE_DEMAND)))
         goto done;
 
@@ -397,7 +405,8 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
     xqi = calloc_cachealigned(1, sizeof(*xqi));
     if (!xqi)
         goto done;
-    xqi->pub.zdom = zdom;
+    zxq = &xqi->zxq;
+    xqi->zxq.zdom = zdom;
     xqi->dev_fd = -1;
 
     /*
@@ -424,15 +433,15 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
         goto done;
 
     ret = -ENOMEM;
-    e = xqi->pub.xqinfo.cmdq.ent - 1;
-    xqi->pub.ctx = calloc_cachealigned(e, sizeof(*xqi->pub.ctx));
-    if (!xqi->pub.ctx)
+    e = zxq->xqinfo.cmdq.ent - 1;
+    zxq->ctx = calloc_cachealigned(e, sizeof(*zxq->ctx));
+    if (!zxq->ctx)
         goto done;
-    xqi->pub.mem = calloc_cachealigned(e, sizeof(*xqi->pub.mem));
-    if (!xqi->pub.mem)
+    zxq->mem = calloc_cachealigned(e, sizeof(*zxq->mem));
+    if (!zxq->mem)
         goto done;
     for (i = 0; i < e; i++)
-        xqi->pub.mem[i].hdr.cmp_index = i;
+        zxq->mem[i].hdr.cmp_index = i;
     e = (e >> ZHPEQ_BITMAP_SHIFT) + 1;
     xqi->free_bitmap = calloc_cachealigned(e, sizeof(*xqi->free_bitmap));
     if (!xqi->free_bitmap)
@@ -447,27 +456,24 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
     flags = (xqi->dev_fd == -1 ? MAP_ANONYMOUS | MAP_PRIVATE : MAP_SHARED);
 
     /* Map qcm, wq, and cq. */
-    xqi->pub.qcm = _zhpeu_mmap(NULL, xqi->pub.xqinfo.qcm.size,
-                               PROT_READ | PROT_WRITE, flags, xqi->dev_fd,
-                               xqi->pub.xqinfo.qcm.off);
-    if (!xqi->pub.qcm) {
+    zxq->qcm = _zhpeu_mmap(NULL, zxq->xqinfo.qcm.size, PROT_READ | PROT_WRITE,
+                           flags, xqi->dev_fd, zxq->xqinfo.qcm.off);
+    if (!zxq->qcm) {
         ret = -errno;
         goto done;
     }
-    xqi->pub.cmd = VPTR(xqi->pub.qcm, ZHPE_XDM_QCM_CMD_BUF_OFFSET);
+    zxq->cmd = VPTR(zxq->qcm, ZHPE_XDM_QCM_CMD_BUF_OFFSET);
 
-    xqi->pub.wq = _zhpeu_mmap(NULL, xqi->pub.xqinfo.cmdq.size,
-                              PROT_READ | PROT_WRITE, flags, xqi->dev_fd,
-                              xqi->pub.xqinfo.cmdq.off);
-    if (!xqi->pub.wq) {
+    zxq->wq = _zhpeu_mmap(NULL, zxq->xqinfo.cmdq.size, PROT_READ | PROT_WRITE,
+                          flags, xqi->dev_fd, zxq->xqinfo.cmdq.off);
+    if (!zxq->wq) {
         ret = -errno;
         goto done;
     }
 
-    xqi->pub.cq = _zhpeu_mmap(NULL, xqi->pub.xqinfo.cmplq.size,
-                              PROT_READ | PROT_WRITE, flags, xqi->dev_fd,
-                              xqi->pub.xqinfo.cmplq.off);
-    if (!xqi->pub.cq) {
+    zxq->cq = _zhpeu_mmap(NULL, zxq->xqinfo.cmplq.size, PROT_READ | PROT_WRITE,
+                          flags, xqi->dev_fd, zxq->xqinfo.cmplq.off);
+    if (!zxq->cq) {
         ret = -errno;
         goto done;
     }
@@ -477,20 +483,20 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
         goto done;
 
     /* Initialize completion tail to zero and set toggle bit. */
-    qcmwrite64(tail.u64, xqi->pub.qcm,
+    qcmwrite64(tail.u64, zxq->qcm,
                ZHPE_XDM_QCM_CMPL_QUEUE_TAIL_TOGGLE_OFFSET);
     /* Intialize command head and tail to zero. */
-    qcmwrite64(0, xqi->pub.qcm, ZHPE_XDM_QCM_CMD_QUEUE_HEAD_OFFSET);
-    qcmwrite64(0, xqi->pub.qcm, ZHPE_XDM_QCM_CMD_QUEUE_TAIL_OFFSET);
+    qcmwrite64(0, zxq->qcm, ZHPE_XDM_QCM_CMD_QUEUE_HEAD_OFFSET);
+    qcmwrite64(0, zxq->qcm, ZHPE_XDM_QCM_CMD_QUEUE_TAIL_OFFSET);
     /* Start the queue. */
-    qcmwrite64(0, xqi->pub.qcm, ZHPE_XDM_QCM_STOP_OFFSET);
+    qcmwrite64(0, zxq->qcm, ZHPE_XDM_QCM_STOP_OFFSET);
     ret = 0;
 
  done:
     if (ret >= 0)
-        *zxq_out = &xqi->pub;
+        *zxq_out = zxq;
     else
-        (void)zhpeq_xq_free(&xqi->pub);
+        (void)zhpeq_xq_free(zxq);
 
     return ret;
 }
@@ -498,10 +504,12 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
 int zhpeq_xq_backend_open(struct zhpeq_xq *zxq, void *sa)
 {
     int                 ret = -EINVAL;
-    struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, pub);
+    struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, zxq);
 
     if (!zxq)
         goto done;
+    /* Assume the container_of() confuses the compiler about aliases. */
+    zxq = &xqi->zxq;
 
     ret = zhpe_xq_open(xqi, sa);
  done:
@@ -512,10 +520,12 @@ int zhpeq_xq_backend_open(struct zhpeq_xq *zxq, void *sa)
 int zhpeq_xq_backend_close(struct zhpeq_xq *zxq, int open_idx)
 {
     int                 ret = -EINVAL;
-    struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, pub);
+    struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, zxq);
 
     if (!zxq)
         goto done;
+    /* Assume the container_of() confuses the compiler about aliases. */
+    zxq = &xqi->zxq;
 
     ret = zhpe_xq_close(xqi, open_idx);
  done:
@@ -526,13 +536,16 @@ int zhpeq_xq_backend_close(struct zhpeq_xq *zxq, int open_idx)
 int32_t zhpeq_xq_reserve(struct zhpeq_xq *zxq, void *context)
 {
     int32_t             ret;
-    struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, pub);
+    struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, zxq);
     uint                i;
 
     if (unlikely(!zxq)) {
         ret = -EINVAL;
         goto done;
     }
+    /* Assume the container_of() confuses the compiler about aliases. */
+    zxq = &xqi->zxq;
+
     ret = ffs64(xqi->free_bitmap[0]);
     if (likely(ret)) {
         ret--;
@@ -542,7 +555,7 @@ int32_t zhpeq_xq_reserve(struct zhpeq_xq *zxq, void *context)
         if (unlikely(ret >= ZHPE_XDM_QCM_CMD_BUF_COUNT))
             ret |= (INS_MEM << 16);
     } else {
-        for (i = 1; i < (xqi->pub.xqinfo.cmdq.ent >> ZHPEQ_BITMAP_SHIFT); i++) {
+        for (i = 1; i < (zxq->xqinfo.cmdq.ent >> ZHPEQ_BITMAP_SHIFT); i++) {
             ret = ffs64(xqi->free_bitmap[i]);
             if (ret) {
                 ret--;
@@ -574,7 +587,7 @@ void zhpeq_xq_commit(struct zhpeq_xq *zxq)
 
 static void *get_context(struct zhpeq_xqi *xqi, struct zhpe_cq_entry *cqe)
 {
-    void                *ret = xqi->pub.ctx[cqe->index];
+    void                *ret = xqi->zxq.ctx[cqe->index];
 
     xqi->free_bitmap[cqe->index >> ZHPEQ_BITMAP_SHIFT] |=
         ((uint64_t)1 << (cqe->index & (ZHPEQ_BITMAP_BITS - 1)));
@@ -642,26 +655,34 @@ void zhpeq_xq_atomic(struct zhpeq_xq *zxq, int32_t reservation,
 ssize_t zhpeq_xq_cq_read(struct zhpeq_xq *zxq,
                          struct zhpeq_xq_cq_entry *entries, size_t n_entries)
 {
-    ssize_t             ret = -EINVAL;
-    struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, pub);
+    ssize_t             ret;
+    struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, zxq);
     volatile union zhpe_hw_cq_entry *cqe;
     ssize_t             i;
     uint32_t            qmask;
 
-    if (!zxq || !entries || n_entries > SSIZE_MAX)
+    if (unlikely(!zxq)) {
+        ret = -EINVAL;
         goto done;
+    }
+    /* Assume the container_of() confuses the compiler about aliases. */
+    zxq = &xqi->zxq;
+    if (unlikely(!entries || n_entries > SSIZE_MAX)) {
+        ret = -EINVAL;
+        goto done;
+    }
 
-    qmask = xqi->pub.xqinfo.cmplq.ent - 1;
+    qmask = zxq->xqinfo.cmplq.ent - 1;
 
     for (i = 0; i < n_entries; i++) {
-        cqe = xqi->pub.cq + (xqi->pub.cq_head & qmask);
-        if (!zhpeq_cmp_valid(cqe, xqi->pub.cq_head, qmask))
+        cqe = zxq->cq + (zxq->cq_head & qmask);
+        if (!zhpeq_cmp_valid(cqe, zxq->cq_head, qmask))
             break;
         entries[i].z = cqe->entry;
         entries[i].z.context = get_context(xqi, &entries[i].z);
         zhpe_stats_stamp(zhpe_stats_subid(ZHPQ, 80), (uintptr_t)zxq,
                          entries[i].z.index, (uintptr_t)entries[i].z.context);
-        xqi->pub.cq_head++;
+        zxq->cq_head++;
     }
     ret = i;
 
@@ -672,17 +693,20 @@ ssize_t zhpeq_xq_cq_read(struct zhpeq_xq *zxq,
 int zhpeq_rq_free(struct zhpeq_rq *zrq)
 {
     int                 ret = -EINVAL;
-    struct zhpeq_rqi    *rqi = container_of(zrq, struct zhpeq_rqi, pub);
+    struct zhpeq_rqi    *rqi = container_of(zrq, struct zhpeq_rqi, zrq);
     int                 rc;
     union rdm_active    active;
 
     if (!zrq)
         goto done;
+    /* Assume the container_of() confuses the compiler about aliases. */
+    zrq = &rqi->zrq;
+
     /* Stop the queue. */
-    if (rqi->pub.qcm) {
-        qcmwrite64(1, rqi->pub.qcm, ZHPE_RDM_QCM_STOP_OFFSET);
+    if (zrq->qcm) {
+        qcmwrite64(1, zrq->qcm, ZHPE_RDM_QCM_STOP_OFFSET);
         for (;;) {
-            active.u64 = qcmread64(rqi->pub.qcm, ZHPE_RDM_QCM_ACTIVE_OFFSET);
+            active.u64 = qcmread64(zrq->qcm, ZHPE_RDM_QCM_ACTIVE_OFFSET);
             if (!active.bits.active)
                 break;
             yield();
@@ -691,15 +715,15 @@ int zhpeq_rq_free(struct zhpeq_rq *zrq)
 
     ret = 0;
     /* Unmap qcm and rq. */
-    rc = _zhpeu_munmap((void *)rqi->pub.qcm, rqi->pub.rqinfo.qcm.size);
+    rc = _zhpeu_munmap((void *)zrq->qcm, zrq->rqinfo.qcm.size);
     if (ret >= 0 && rc < 0)
         ret = rc;
-    rc = _zhpeu_munmap((void *)rqi->pub.rq, rqi->pub.rqinfo.cmplq.size);
+    rc = _zhpeu_munmap((void *)zrq->rq, zrq->rqinfo.cmplq.size);
     if (ret >= 0 && rc < 0)
         ret = rc;
 
     /* Call the driver to free the queue. */
-    if (rqi->pub.rqinfo.qcm.size) {
+    if (zrq->rqinfo.qcm.size) {
         rc = zhpe_rq_free(rqi);
         if (ret >= 0 && rc < 0)
             ret = rc;
@@ -720,6 +744,7 @@ int zhpeq_rq_alloc(struct zhpeq_dom *zdom, int rx_qlen, int slice_mask,
     union rdm_rcv_tail  tail = {
         .bits.toggle_valid = 1,
     };
+    struct zhpeq_rq     *zrq;
     int                 flags;
     size_t              orig;
 
@@ -734,7 +759,8 @@ int zhpeq_rq_alloc(struct zhpeq_dom *zdom, int rx_qlen, int slice_mask,
     rqi = calloc_cachealigned(1, sizeof(*rqi));
     if (!rqi)
         goto done;
-    rqi->pub.zdom = zdom;
+    zrq = &rqi->zrq;
+    zrq->zdom = zdom;
     rqi->dev_fd = -1;
 
     /* Same questions/comments as above. */
@@ -751,36 +777,34 @@ int zhpeq_rq_alloc(struct zhpeq_dom *zdom, int rx_qlen, int slice_mask,
     flags = (rqi->dev_fd == -1 ? MAP_ANONYMOUS | MAP_PRIVATE : MAP_SHARED);
 
     /* Map qcm, wq, and cq. */
-    rqi->pub.qcm = _zhpeu_mmap(NULL, rqi->pub.rqinfo.qcm.size,
-                               PROT_READ | PROT_WRITE, flags, rqi->dev_fd,
-                               rqi->pub.rqinfo.qcm.off);
-    if (!rqi->pub.qcm) {
+    zrq->qcm = _zhpeu_mmap(NULL, zrq->rqinfo.qcm.size, PROT_READ | PROT_WRITE,
+                           flags, rqi->dev_fd, zrq->rqinfo.qcm.off);
+    if (!zrq->qcm) {
         ret = -errno;
         goto done;
     }
 
-    rqi->pub.rq = _zhpeu_mmap(NULL, rqi->pub.rqinfo.cmplq.size,
-                              PROT_READ | PROT_WRITE, flags, rqi->dev_fd,
-                              rqi->pub.rqinfo.cmplq.off);
-    if (!rqi->pub.rq) {
+    zrq->rq = _zhpeu_mmap(NULL, zrq->rqinfo.cmplq.size, PROT_READ | PROT_WRITE,
+                          flags, rqi->dev_fd, zrq->rqinfo.cmplq.off);
+    if (!zrq->rq) {
         ret = -errno;
         goto done;
     }
 
     /* Initialize receive tail to zero and set toggle bit. */
-    qcmwrite64(tail.u64, rqi->pub.qcm,
+    qcmwrite64(tail.u64, zrq->qcm,
                ZHPE_RDM_QCM_RCV_QUEUE_TAIL_TOGGLE_OFFSET);
     /* Intialize receive head to zero. */
-    qcmwrite64(0, rqi->pub.qcm, ZHPE_RDM_QCM_RCV_QUEUE_HEAD_OFFSET);
+    qcmwrite64(0, zrq->qcm, ZHPE_RDM_QCM_RCV_QUEUE_HEAD_OFFSET);
     /* Start the queue. */
-    qcmwrite64(0, rqi->pub.qcm, ZHPE_RDM_QCM_STOP_OFFSET);
+    qcmwrite64(0, zrq->qcm, ZHPE_RDM_QCM_STOP_OFFSET);
     ret = 0;
  done:
 
     if (ret >= 0)
-        *zrq_out = &rqi->pub;
+        *zrq_out = zrq;
     else
-        (void)zhpeq_rq_free(&rqi->pub);
+        (void)zhpeq_rq_free(zrq);
 
     return ret;
 }
@@ -788,7 +812,7 @@ int zhpeq_rq_alloc(struct zhpeq_dom *zdom, int rx_qlen, int slice_mask,
 int zhpeq_rq_wait_check(struct zhpeq_rq *zrq, uint64_t poll_cycles)
 {
     int                 ret = -EINVAL;
-    struct zhpeq_rqi    *rqi = container_of(zrq, struct zhpeq_rqi, pub);
+    struct zhpeq_rqi    *rqi = container_of(zrq, struct zhpeq_rqi, zrq);
 
     /*
      * To be called after zhpeq_rq_valid() fails; returns > 0
@@ -802,8 +826,10 @@ int zhpeq_rq_wait_check(struct zhpeq_rq *zrq, uint64_t poll_cycles)
      */
     if (!zrq)
         goto done;
+    /* Assume the container_of() confuses the compiler about aliases. */
+    zrq = &rqi->zrq;
 
-    ret = zhpe_rq_poll_check(rqi, poll_cycles);
+    ret = zhpe_rq_wait_check(rqi, poll_cycles);
  done:
 
     return ret;
@@ -812,9 +838,13 @@ int zhpeq_rq_wait_check(struct zhpeq_rq *zrq, uint64_t poll_cycles)
 int zhpeq_rq_get_addr(struct zhpeq_rq *zrq, void *sa, size_t *sa_len)
 {
     ssize_t             ret = -EINVAL;
-    struct zhpeq_rqi    *rqi = container_of(zrq, struct zhpeq_rqi, pub);
+    struct zhpeq_rqi    *rqi = container_of(zrq, struct zhpeq_rqi, zrq);
 
-    if (!zrq || !sa || !sa_len)
+    if (!zrq)
+        goto done;
+    /* Assume the container_of() confuses the compiler about aliases. */
+    zrq = &rqi->zrq;
+    if (!sa || !sa_len)
         goto done;
 
     ret = zhpe_rq_get_addr(rqi, sa, sa_len);
@@ -841,7 +871,106 @@ int zhpeq_rq_xchg_addr(struct zhpeq_rq *zrq, int sock_fd,
     if (ret < 0)
         goto done;
  done:
+
     return ret;
+}
+
+int zhpeq_rq_epoll_ring_deinit(struct zhpeq_rq_epoll_ring *zrqring)
+{
+    int                 ret = 0;
+
+    if (!zrqring)
+        goto done;
+    free(zrqring->rq);
+    zrqring->rq = NULL;
+ done:
+
+    return ret;
+}
+
+int zhpeq_rq_epoll_ring_init(struct zhpeq_rq_epoll_ring *zrqring,
+                             size_t ring_size)
+{
+    int                 ret = -EINVAL;
+
+    if (!zrqring || !ring_size || ring_size > ZHPE_MAX_RDMQS)
+        goto done;
+    zrqring->rq_sz = ring_size;
+    zrqring->rq_rd = 0;
+    zrqring->rq_wr = 0;
+    zrqring->rq_msk = roundup_pow_of_2(ring_size) - 1;
+    zrqring->rq = _calloc(zrqring->rq_msk + 1, sizeof(*zrqring->rq));
+    if (!zrqring->rq) {
+        ret = -ENOMEM;
+        goto done;
+    }
+    ret = 0;
+ done:
+
+    return ret;
+}
+
+int zhpeq_rq_epoll_ring_ready(void *varg, struct zhpeq_rq *zrq)
+{
+    int                 ret;
+    struct zhpeq_rq_epoll_ring *zrqring = varg;
+
+    ret = zrqring->rq_wr - zrqring->rq_rd;
+    if (ret > zrqring->rq_msk) {
+        /* No space left in ring. */
+        ret = -ENOSPC;
+        goto done;
+    }
+    ret++;
+    zrqring->rq[zrqring->rq_wr++ & zrqring->rq_msk] = zrq;
+ done:
+
+    return ret;
+}
+
+int zhpeq_rq_epoll_deinit(void)
+{
+    return zhpe_rq_epoll_deinit();
+}
+
+int zhpeq_rq_epoll_init(void)
+{
+    return zhpe_rq_epoll_init();
+}
+
+int zhpeq_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
+                   int (*zrq_ready)(void *varg, struct zhpeq_rq *zrq),
+                   void *varg)
+{
+    int                 ret = -EINVAL;
+
+    if (!zrq_ready)
+        goto done;
+    ret = zhpe_rq_epoll(timeout_ms, sigmask, eintr_ok, zrq_ready, varg);
+ done:
+
+    return ret;
+}
+
+int zhpeq_rq_epoll_enable(struct zhpeq_rq *zrq)
+{
+    int                 ret = -EINVAL;
+    struct zhpeq_rqi    *rqi = container_of(zrq, struct zhpeq_rqi, zrq);
+
+    if (!zrq)
+        goto done;
+    /* Assume the container_of() confuses the compiler about aliases. */
+    zrq = &rqi->zrq;
+
+    ret = zhpe_rq_epoll_enable(rqi);
+ done:
+
+    return ret;
+}
+
+int zhpeq_rq_epoll_signal(void)
+{
+    return zhpe_rq_epoll_signal();
 }
 
 int zhpeq_mr_reg(struct zhpeq_dom *zdom, const void *buf, size_t len,
@@ -850,15 +979,18 @@ int zhpeq_mr_reg(struct zhpeq_dom *zdom, const void *buf, size_t len,
     zhpe_stats_start(zhpe_stats_subid(ZHPQ, 0));
 
     int                 ret = -EINVAL;
+    struct zhpeq_domi   *zdomi = container_of(zdom, struct zhpeq_domi, zdom);
 
     if (!qkdata_out)
         goto done;
     *qkdata_out = NULL;
-    if (!zdom || !len || page_up((uintptr_t)buf + len)  <= (uintptr_t)buf ||
+    /* Assume the container_of() confuses the compiler about aliases. */
+    zdom = &zdomi->zdom;
+    if (!len || page_up((uintptr_t)buf + len)  <= (uintptr_t)buf ||
         (access & ~ZHPEQ_MR_VALID_MASK))
         goto done;
 
-    ret = zhpe_mr_reg(zdom, buf, len, access, qkdata_out);
+    ret = zhpe_mr_reg(zdomi, buf, len, access, qkdata_out);
 #if QKDATA_DUMP
     if (ret >= 0)
         zhpeq_print_qkdata(__func__, __LINE__, *qkdata_out);
@@ -878,6 +1010,9 @@ int zhpeq_qkdata_free(struct zhpeq_key_data *qkdata)
 
     if (!qkdata)
         goto done;
+    /* Assume the container_of() confuses the compiler about aliases. */
+    qkdata = &desc->qkdata;
+
     ret = -EINVAL;
     if (desc->hdr.magic != ZHPE_MAGIC ||
         (desc->hdr.version & ~ZHPEQ_MR_REMOTE) != ZHPEQ_MR_V1)
@@ -885,14 +1020,14 @@ int zhpeq_qkdata_free(struct zhpeq_key_data *qkdata)
 #if QKDATA_DUMP
     zhpeq_print_qkdata(__func__, __LINE__, qkdata);
 #endif
-    if (desc->qkdata.z.zaddr) {
+    if (qkdata->z.zaddr) {
         if (desc->hdr.version & ZHPEQ_MR_REMOTE) {
             zhpe_stats_start(zhpe_stats_subid(ZHPQ, 50));
-            ret = zhpe_zmmu_free(qkdata);
+            ret = zhpe_zmmu_free(desc);
             zhpe_stats_stop(zhpe_stats_subid(ZHPQ, 50));
         } else {
             zhpe_stats_start(zhpe_stats_subid(ZHPQ, 10));
-            ret = zhpe_mr_free(qkdata);
+            ret = zhpe_mr_free(desc);
             zhpe_stats_stop(zhpe_stats_subid(ZHPQ, 10));
         }
     }
@@ -911,14 +1046,18 @@ int zhpeq_zmmu_reg(struct zhpeq_key_data *qkdata)
     struct zhpeq_mr_desc_v1 *desc =
         container_of(qkdata, struct zhpeq_mr_desc_v1, qkdata);
 
-    if (!qkdata || desc->hdr.magic != ZHPE_MAGIC ||
+    if (!qkdata)
+        goto done;
+    /* Assume the container_of() confuses the compiler about aliases. */
+    qkdata = &desc->qkdata;
+    if (desc->hdr.magic != ZHPE_MAGIC ||
         desc->hdr.version != (ZHPEQ_MR_V1 | ZHPEQ_MR_REMOTE))
         goto done;
 
 #if QKDATA_DUMP
     zhpeq_print_qkdata(__func__, __LINE__, qkdata);
 #endif
-    ret = zhpe_zmmu_reg(qkdata);
+    ret = zhpe_zmmu_reg(desc);
 
  done:
     zhpe_stats_stop(zhpe_stats_subid(ZHPQ, 40));
@@ -930,7 +1069,7 @@ int zhpeq_fam_qkdata(struct zhpeq_dom *zdom, int open_idx,
                      struct zhpeq_key_data **qkdata_out)
 {
     int                 ret = -EINVAL;
-    struct zhpeq_domi   *zdomi = container_of(zdom, struct zhpeq_domi, pub);
+    struct zhpeq_domi   *zdomi = container_of(zdom, struct zhpeq_domi, zdom);
 
     zhpe_stats_start(zhpe_stats_subid(ZHPQ, 20));
 
@@ -939,6 +1078,8 @@ int zhpeq_fam_qkdata(struct zhpeq_dom *zdom, int open_idx,
     *qkdata_out = NULL;
     if (!zdom)
         goto done;
+    /* Assume the container_of() confuses the compiler about aliases. */
+    zdom = &zdomi->zdom;
 
     ret = zhpe_fam_qkdata(zdomi, open_idx, qkdata_out);
 
@@ -962,8 +1103,11 @@ int zhpeq_qkdata_export(const struct zhpeq_key_data *qkdata,
     const struct zhpeq_mr_desc_v1 *desc =
         container_of(qkdata, const struct zhpeq_mr_desc_v1, qkdata);
 
-    if (!qkdata || !blob || !blob_len ||
-        *blob_len < sizeof(struct key_data_packed) ||
+    if (!qkdata)
+        goto done;
+    /* Assume the container_of() confuses the compiler about aliases. */
+    qkdata = &desc->qkdata;
+    if (!blob || !blob_len || *blob_len < sizeof(struct key_data_packed) ||
         desc->hdr.magic != ZHPE_MAGIC || desc->hdr.version != ZHPEQ_MR_V1)
         goto done;
 
@@ -984,7 +1128,7 @@ int zhpeq_qkdata_import(struct zhpeq_dom *zdom, int open_idx,
                         struct zhpeq_key_data **qkdata_out)
 {
     int                 ret = -EINVAL;
-    struct zhpeq_domi   *zdomi = container_of(zdom, struct zhpeq_domi, pub);
+    struct zhpeq_domi   *zdomi = container_of(zdom, struct zhpeq_domi, zdom);
     const struct key_data_packed *pdata = blob;
     struct zhpeq_mr_desc_v1 *desc = NULL;
     struct zhpeq_key_data *qkdata;
@@ -992,6 +1136,10 @@ int zhpeq_qkdata_import(struct zhpeq_dom *zdom, int open_idx,
     if (!qkdata_out)
         goto done;
     *qkdata_out = NULL;
+    if (!zdom)
+        goto done;
+    /* Assume the container_of() confuses the compiler about aliases. */
+    zdom = &zdomi->zdom;
     if (!blob || blob_len != sizeof(*pdata))
         goto done;
 
@@ -1026,7 +1174,11 @@ int zhpeq_mmap(const struct zhpeq_key_data *qkdata,
 
     if (zmdesc)
         *zmdesc = NULL;
-    if (!qkdata || !zmdesc || (cache_mode & ~ZHPEQ_MR_REQ_CPU_CACHE) ||
+    if (!qkdata)
+        goto done;
+    /* Assume the container_of() confuses the compiler about aliases. */
+    qkdata = &desc->qkdata;
+    if (!zmdesc || (cache_mode & ~ZHPEQ_MR_REQ_CPU_CACHE) ||
         desc->hdr.magic != ZHPE_MAGIC ||
         desc->hdr.version != (ZHPEQ_MR_V1 | ZHPEQ_MR_REMOTE) ||
         !length || page_off(offset) ||
@@ -1035,9 +1187,10 @@ int zhpeq_mmap(const struct zhpeq_key_data *qkdata,
         ((prot & PROT_READ) && !(qkdata->z.access & ZHPEQ_MR_GET_REMOTE)) ||
         ((prot & PROT_WRITE) && !(qkdata->z.access & ZHPEQ_MR_PUT_REMOTE)))
         goto done;
+
     cache_mode |= ZHPEQ_MR_REQ_CPU;
 
-    ret = zhpe_mmap(qkdata, cache_mode, addr, length, prot,
+    ret = zhpe_mmap(desc, cache_mode, addr, length, prot,
                     flags, offset, zmdesc);
 
 #if QKDATA_DUMP
@@ -1080,7 +1233,12 @@ void zhpeq_print_xq_info(struct zhpeq_xq *zxq)
 {
     const char          *b_str = "unknown";
     struct zhpe_attr    *attr = &b_attr.z;
-    struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, pub);
+    struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, zxq);
+
+    if (!zxq)
+        return;
+    /* Assume the container_of() confuses the compiler about aliases. */
+    zxq = &xqi->zxq;
 
     switch (b_attr.backend) {
 
@@ -1211,11 +1369,15 @@ void zhpeq_print_qkdata(const char *func, uint line,
                         const struct zhpeq_key_data *qkdata)
 {
     char                *id_str = NULL;
+    const struct zhpeq_mr_desc_v1 *desc =
+        container_of(qkdata, const struct zhpeq_mr_desc_v1, qkdata);
 
     if (!qkdata)
         return;
+    /* Assume the container_of() confuses the compiler about aliases. */
+    qkdata = &desc->qkdata;
 
-    id_str = zhpe_qkdata_id_str(qkdata);
+    id_str = zhpe_qkdata_id_str(desc);
     fprintf(stderr, "%s,%u:%p %s\n", func, line, qkdata, (id_str ?: ""));
     fprintf(stderr, "%s,%u:v/z/l 0x%Lx 0x%Lx 0x%Lx\n", func, line,
             (ullong)qkdata->z.vaddr, (ullong)qkdata->z.zaddr,

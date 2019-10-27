@@ -43,6 +43,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <sys/epoll.h>
+
 #include <zhpeq_util.h>
 
 #include <zhpe_uapi.h>
@@ -126,10 +128,10 @@ enum zhpeq_backend {
 };
 
 enum {
-    ZHPEQ_PRI_MAX               = 1,
-    ZHPEQ_TC_MAX                = 15,
-    ZHPEQ_IMM_MAX               = ZHPE_IMM_MAX,
-    ZHPEQ_KEY_BLOB_MAX          = 32,
+    ZHPEQ_MAX_PRI               = 1,
+    ZHPEQ_MAX_TC                = 15,
+    ZHPEQ_MAX_IMM               = ZHPE_MAX_IMM,
+    ZHPEQ_MAX_KEY_BLOB          = 32,
 };
 
 struct zhpeq_attr {
@@ -192,10 +194,19 @@ struct zhpeq_rq {
     struct zhpeq_dom    *zdom;
     struct zhpe_rqinfo  rqinfo;
     volatile void       *qcm;
-    uint64_t            rx_timestamp_last;
-    uint32_t            rx_timestamp_head;
+    union zhpe_hw_rdm_entry *rq;
+    uint64_t            rx_poll_start;
+    uint32_t            rx_poll_start_head;
     uint32_t            head;
     uint32_t            head_commit;
+};
+
+struct zhpeq_rq_epoll_ring {
+    uint32_t            rq_sz;
+    uint32_t            rq_msk;
+    uint32_t            rq_rd;
+    uint32_t            rq_wr;
+    struct zhpeq_rq     **rq;
 };
 
 static inline int zhpeq_rem_key_access(struct zhpeq_key_data *qkdata,
@@ -373,10 +384,10 @@ void zhpeq_xq_atomic(struct zhpeq_xq *zxq, int32_t reservation,
                      enum zhpeq_atomic_op op, uint64_t rem_addr,
                      const uint64_t *operands);
 
-static inline bool zhpeq_cmp_valid(voltile void *qent, uint32_t qindex,
+static inline bool zhpeq_cmp_valid(volatile void *qent, uint32_t qindex,
                                    uint32_t qmask)
 {
-    uint                valid = atm_load_rlx((volatile uint8_t *)qent);
+    uint                valid = atm_load_rlx((uint8_t *)qent);
     uint                shift = fls32(qmask);
 
     return ((valid ^ (qindex >> shift)) & ZHPE_CMP_ENT_VALID_MASK);
@@ -390,26 +401,47 @@ int zhpeq_rq_free(struct zhpeq_rq *zrq);
 int zhpeq_rq_alloc(struct zhpeq_dom *zdom, int rx_qlen, int slice_mask,
                    struct zhpeq_rq **zrq_out);
 
-static inline struct zhpe_rdm_entry *zhpeq_rq_valid(struct zhpeq_rq *zrq)
+static inline struct zhpe_rdm_entry *zhpeq_rq_valid(struct zhpeq_rq *zrq,
+                                                    bool increment)
 {
     uint32_t            qmask = zrq->rqinfo.cmplq.ent - 1;
     uint32_t            qindex = zrq->head;
     struct zhpe_rdm_entry *rqe = &zrq->rq[qindex & qmask].entry;
 
     if (zhpeq_cmp_valid(rqe, qindex, qmask)) {
-        zrq->head = qindex++;
+        if (increment)
+            zrq->head = qindex++;
         return rqe;
     }
 
     return NULL;
 }
 
-bool zhpeq_rq_poll_check(struct zhpeq_rq *zrq, uint64_t poll_usec)
+int zhpeq_rq_wait_check(struct zhpeq_rq *zrq, uint64_t poll_cycles);
 
 int zhpeq_rq_get_addr(struct zhpeq_rq *zrq, void *sa, size_t *sa_len);
 
 int zhpeq_rq_xchg_addr(struct zhpeq_rq *zrq, int sock_fd,
                        void *sa, size_t *sa_len);
+
+int zhpeq_rq_epoll_ring_deinit(struct zhpeq_rq_epoll_ring *zrqring);
+
+int zhpeq_rq_epoll_ring_init(struct zhpeq_rq_epoll_ring *zrqring,
+                             size_t ring_size);
+
+int zhpeq_rq_epoll_ring_ready(void *varg, struct zhpeq_rq *zrq);
+
+int zhpeq_rq_epoll_deinit(void);
+
+int zhpeq_rq_epoll_init(void);
+
+int zhpeq_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool entr_ok,
+                   int (*zrq_active)(void *varg, struct zhpeq_rq *zrq),
+                   void *varg);
+
+int zhpeq_rq_epoll_enable(struct zhpeq_rq *zrq);
+
+int zhpeq_rq_epoll_signal(void);
 
 int zhpeq_mr_reg(struct zhpeq_dom *zdom, const void *buf, size_t len,
                  uint32_t access, struct zhpeq_key_data **qkdata_out);

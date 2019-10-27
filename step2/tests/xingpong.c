@@ -231,7 +231,7 @@ static int do_mem_setup(struct stuff *conn)
 static int do_mem_xchg(struct stuff *conn)
 {
     int                 ret;
-    char                blob[ZHPEQ_KEY_BLOB_MAX];
+    char                blob[ZHPEQ_MAX_KEY_BLOB];
     struct mem_wire_msg mem_msg;
     size_t              blob_len;
 
@@ -359,7 +359,7 @@ static int zxq_write(struct zhpeq_xq *zxq, const void *buf, uint64_t lcl_zaddr,
         print_func_err(__func__, __LINE__, "zhpeq_xq_reserve", "", ret);
         goto done;
     }
-    if (len <= ZHPEQ_IMM_MAX)
+    if (len <= ZHPEQ_MAX_IMM)
         zhpeq_xq_puti(zxq, ret, 0, buf, len, rem_zaddr);
     else
         zhpeq_xq_put(zxq, ret, 0, lcl_zaddr, len, rem_zaddr);
