@@ -277,23 +277,23 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
             if (likely(ret > 0)) {
                 if (!zhpeu_expected_saw("cnt", 1, ret)) {
                     ret = -EIO;
-                    goto done;
+                    break;
                 }
                 zrq = zhpeq_rq_epoll_ring_read(&conn->epoll_ring);
                 if (!zhpeu_expected_saw("zrq", conn->zrq, zrq)) {
                     ret = -EIO;
-                    goto done;
+                    break;
                 }
                 conn->epoll = false;
             } else if (ret < 0)
-                goto done;
+                break;
             else
                 break;
         }
         if (zhpeq_cmp_valid(rqe, qindex, conn->qlen)) {
             *msg_out = (void *)rqe->payload;
             ret = 1;
-            goto done;
+            break;
         }
         ret = zhpeq_rq_wait_check(conn->zrq, conn->poll_cycles);
         if (unlikely(ret)) {
@@ -305,13 +305,12 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
             } else {
                 zhpeu_print_func_err(__func__, __LINE__,
                                      "zhpeq_rq_wait_check", "", ret);
-                goto done;
+                break;
             }
         }
         if (!sleep_ok)
             break;
     }
- done:
 
     return ret;
 }
