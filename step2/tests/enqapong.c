@@ -964,7 +964,7 @@ int main(int argc, char **argv)
             usage(false);
         if (do_server(&args) < 0)
             goto done;
-    } else if (opt == 5) {
+    } else if (opt == 3) {
         args.service = argv[optind++];
         args.node = argv[optind++];
         if (_zhpeu_parse_kb_uint64_t(
