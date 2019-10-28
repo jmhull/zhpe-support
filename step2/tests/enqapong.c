@@ -186,7 +186,7 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start, uint8_t flag)
     uint64_t            now = get_cycles(NULL);
     struct enqa_msg     *msg;
 
-    ret = zhpeq_xq_reserve(zxq, NULL);
+    ret = zhpeq_xq_reserve(zxq);
     if (ret < 0) {
         if (ret != -EAGAIN)
             zhpeu_print_func_err(__func__, __LINE__, "zhpeq_xq_reserve", "",
@@ -194,7 +194,7 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start, uint8_t flag)
         goto done;
     }
     msg = zhpeq_xq_enqa(zxq, ret, 0, conn->dgcid, conn->rspctxid);
-    zxq->ctx[ret] = msg;
+    zhpeq_xq_set_context(zxq, ret, msg);
     msg->tx_start = htobe64(now);
     if (!pp_start)
         pp_start = msg->tx_start;

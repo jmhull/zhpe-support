@@ -282,7 +282,7 @@ static inline void qcmwrite64(uint64_t value, volatile void *qcm, size_t off)
     iowrite64(value, (char *)qcm + off);
 }
 
-int32_t zhpeq_xq_reserve(struct zhpeq_xq *zxq, void *context);
+int32_t zhpeq_xq_reserve(struct zhpeq_xq *zxq);
 
 void zhpeq_xq_commit(struct zhpeq_xq *zxq);
 
@@ -298,6 +298,12 @@ static inline void zhpeq_xq_insert(struct zhpeq_xq *zxq, int32_t reservation,
         zhpeq_insert[ZHPEQ_INSERT_MEM](zxq, reservation);
     else
         zhpeq_insert[reservation >> ZHPEQ_INSERT_SHIFT](zxq, reservation);
+}
+
+static inline void zhpeq_xq_set_context(struct zhpeq_xq *zxq,
+                                        int32_t reservation, void *context)
+{
+    zxq->ctx[(uint16_t)reservation] = context;
 }
 
 static inline void zhpeq_xq_nop(struct zhpeq_xq *zxq, int32_t reservation,

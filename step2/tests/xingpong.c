@@ -354,11 +354,12 @@ static int zxq_write(struct zhpeq_xq *zxq, const void *buf, uint64_t lcl_zaddr,
 {
     int32_t             ret;
 
-    ret = zhpeq_xq_reserve(zxq, NULL);
+    ret = zhpeq_xq_reserve(zxq);
     if (ret < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_xq_reserve", "", ret);
         goto done;
     }
+    zhpeq_xq_set_context(zxq, ret, NULL);
     if (len <= ZHPEQ_MAX_IMM)
         zhpeq_xq_puti(zxq, ret, 0, buf, len, rem_zaddr);
     else

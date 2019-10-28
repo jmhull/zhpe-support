@@ -261,11 +261,12 @@ static int zxq_rma_op(struct zhpeq_xq *zxq, bool read, void *lcl_buf,
         .handler        = NULL,
     };
 
-    ret = zhpeq_xq_reserve(zxq, &ctxt);
+    ret = zhpeq_xq_reserve(zxq);
     if (ret < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_xq_reserve", "", ret);
         goto done;
     }
+    zhpeq_xq_set_context(zxq, ret, &ctxt);
     if (read) {
         if (lcl_buf) {
             ctxt.handler = geti_handler;
