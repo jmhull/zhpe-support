@@ -89,8 +89,7 @@ _EXTERN_C_BEG
     __auto_type         __ret = (_a);                           \
     __auto_type         __b = (_b);                             \
     /* Force compilation error if different types. */           \
-    typeof(&__ret)      __p MAYBE_UNUSED;                       \
-    __p = &__b;                                                 \
+    typeof(&__ret)      __p MAYBE_UNUSED = &__b;                \
                                                                 \
     if (__b > __ret)                                            \
         __ret = __b;                                            \
@@ -159,13 +158,13 @@ typedef unsigned char   uchar;
 extern const char       *zhpeu_appname;
 
 /* Borrow AF_APPLETALK since it should never be seen. */
-#define AF_ZHPE         AF_APPLETALK
-#define ZHPE_ADDRSTRLEN         (37)
+#define AF_ZHPE                 ((sa_family_t)AF_APPLETALK)
+#define ZHPE_ADDRSTRLEN         ((size_t)37)
 #define ZHPE_WILDCARD           (0)     /* Valid, but reserved by driver. */
 #define ZHPE_SZQ_INVAL          (~(uint32_t)0)
 
-#define ZHPE_GCID_MASK          ((1U << ZHPE_GCID_BITS) - 1)
-#define ZHPE_CTXID_MASK         ((1U << ZHPE_CTXID_BITS) - 1)
+#define ZHPE_GCID_MASK          (((uint32_t)1 << ZHPE_GCID_BITS) - 1)
+#define ZHPE_CTXID_MASK         (((uint32_t)1 << ZHPE_CTXID_BITS) - 1)
 
 #define ZHPE_SZQ_FLAGS_MASK     (0xFFU << ZHPE_CTXID_BITS)
 #define ZHPE_SZQ_FLAGS_FAM      (1U << ZHPE_CTXID_BITS)
@@ -421,8 +420,7 @@ char *zhpeu_sockaddr_str(const void *addr);
     __auto_type         __e = (_expected);                      \
     __auto_type         __s = (_saw);                           \
     /* Force compilation error if different types. */           \
-    typeof(&__e)        __p MAYBE_UNUSED;                       \
-    __p = &__s;                                                 \
+    typeof(&__e)        __p MAYBE_UNUSED = &__s;                \
                                                                 \
     __ret = (__e == __s);                                       \
     if (!__ret) {                                               \

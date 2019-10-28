@@ -34,6 +34,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#undef _ZHPEQ_TEST_COMPAT_
 #include <zhpeq.h>
 #include <zhpeq_util.h>
 
@@ -43,11 +44,13 @@
 #else
 #define TIMEOUT         (10000)
 #endif
-#define ZXQ_LEN         (1023)
+#define DEFAULT_POLL    (100)
+#define DEFAULT_QLEN    (1023)
+#define DEFAULT_WARMUP  (100)
 
 struct cli_wire_msg {
-    uint64_t            ring_entries;
     uint64_t            qlen;
+    uint64_t            poll_usec;
     bool                once_mode;
 };
 
@@ -61,12 +64,19 @@ enum {
 struct args {
     const char          *node;
     const char          *service;
-    uint64_t            ring_entries;
     uint64_t            ring_ops;
+    uint64_t            warmup;
     uint64_t            qlen;
-    uint64_t            delay;
+    uint64_t            poll_usec;
     bool                once_mode;
     bool                seconds_mode;
+};
+
+struct timing {
+    uint64_t            tot;
+    uint64_t            min;
+    uint64_t            max;
+    uint64_t            cnt;
 };
 
 struct stuff {
@@ -76,40 +86,92 @@ struct stuff {
     struct zhpeq_rq     *zrq;
     int                 sock_fd;
     size_t              ring_ops;
+    size_t              ring_warmup;
+    size_t              tx_avail;
     size_t              qlen;
-    uint64_t            tx_seq;
-    uint64_t            tx_cmp;
-    uint64_t            tx_cmp_oos;
-    uint64_t            rx_seq;
-    uint64_t            rx_seq_oos;
+    uint32_t            dgcid;
+    uint32_t            rspctxid;
+    int                 tx_oos_max;
+    int                 rx_oos_max;
+    size_t              tx_oos;
+    size_t              rx_oos;
+    size_t              epoll_cnt;
+    uint64_t            poll_cycles;
+    struct timing       tx_lat;
+    struct timing       tx_cmp;
+    uint64_t            rx_last;
+    struct timing       rx_lat;
+    struct timing       pp_lat;
+    struct zhpeq_rq_epoll_ring epoll_ring;
     int                 open_idx;
+    uint8_t             qd_last;
+    bool                epoll;
     bool                allocated;
 };
 
 struct enqa_msg {
-    uint64_t            tx_seq;
-    uint64_t            tx_stamp;
+    uint64_t            tx_start;
+    uint64_t            pp_start;
+    uint32_t            seq;
+    uint8_t             flag;
 };
+
+static void timing_reset(struct timing *t)
+{
+    t->tot = 0;
+    t->min = ~(uint64_t)0;
+    t->max = 0;
+    t->cnt = 0;
+}
+
+static void timing_update(struct timing *t, uint64_t cycles)
+{
+    t->tot += cycles;
+    t->min = min(t->min, cycles);
+    t->max = min(t->max, cycles);
+    t->cnt++;
+}
+
+static void conn_tx_stats_reset(struct stuff *conn)
+{
+    timing_reset(&conn->tx_lat);
+    timing_reset(&conn->tx_cmp);
+    conn->tx_oos = 0;
+    conn->tx_oos_max = 0;
+}
+
+static void conn_rx_stats_reset(struct stuff *conn, uint64_t rx_last)
+{
+    timing_reset(&conn->rx_lat);
+    conn->rx_oos = 0;
+    conn->rx_oos_max = 0;
+    conn->rx_last = rx_last;
+    timing_reset(&conn->pp_lat);
+}
+
+static void timing_print(struct timing *t, const char *lbl, uint64_t divisor)
+{
+    if (!t->cnt)
+        return;
+    zhpeu_print_info("%s:%s:ave/min/max/cnt %.3lf/%.3lf/%.3lf/%" PRIu64 "\n",
+                     zhpeu_appname, lbl,
+                     cycles_to_usec(t->tot, t->cnt * divisor),
+                     cycles_to_usec(t->min, divisor),
+                     cycles_to_usec(t->max, divisor),
+                     t->cnt);
+}
 
 static void stuff_free(struct stuff *stuff)
 {
     if (!stuff)
         return;
 
-    if (stuff->zxq) {
-        zhpeq_qkdata_free(stuff->zxq_remote_kdata);
-        zhpeq_qkdata_free(stuff->zxq_local_kdata);
-    }
+    zhpeq_rq_epoll_ring_deinit(&stuff->epoll_ring);
     if (stuff->open_idx != -1)
         zhpeq_xq_backend_close(stuff->zxq, stuff->open_idx);
     zhpeq_rq_free(stuff->zrq);
     zhpeq_xq_free(stuff->zxq);
     zhpeq_domain_free(stuff->zdom);
-
-    free(stuff->rx_rcv);
-    free(stuff->ring_timestamps);
-    if (stuff->tx_addr)
-        munmap(stuff->tx_addr, stuff->ring_end_off * 2);
 
     FD_CLOSE(stuff->sock_fd);
 
@@ -117,62 +179,161 @@ static void stuff_free(struct stuff *stuff)
         free(stuff);
 }
 
-static int conn_enqa(struct stuff *conn)
+static int conn_tx_msg(struct stuff *conn, uint64_t pp_start, uint8_t flag)
 {
     int32_t             ret;
-    uint64_t            tx_seq = conn->tx_seq++;
+    struct zhpeq_xq     *zxq = conn->zxq;
+    uint64_t            now = get_cycles(NULL);
     struct enqa_msg     *msg;
 
-    ret = zhpeq_xq_reserve(zxq, TO_PTR(seq));
+    ret = zhpeq_xq_reserve(zxq, NULL);
     if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_xq_reserve", "", ret);
+        if (ret != -EAGAIN)
+            zhpeu_print_func_err(__func__, __LINE__, "zhpeq_xq_reserve", "",
+                                 ret);
         goto done;
     }
-    msg = zhpeq_xq_enqa(conn->zxq, ret, 0, conn->dgcid, conn->rspctxid);
-    msg->tx_seq = htobe64(tx_seq);
-    msg->tx_stamp = htobe64(get_cycles(NULL));
+    msg = zhpeq_xq_enqa(zxq, ret, 0, conn->dgcid, conn->rspctxid);
+    zxq->ctx[ret] = msg;
+    msg->tx_start = htobe64(now);
+    if (!pp_start)
+        pp_start = msg->tx_start;
+    msg->pp_start = pp_start;
+    msg->seq = htobe32(zxq->wq_tail);
+    msg->flag = flag;
     zhpeq_xq_insert(zxq, ret, false);
     zhpeq_xq_commit(zxq);
+    conn->tx_avail--;
  done:
 
     return ret;
 }
 
-static ssize_t conn_completions(struct stuff *conn)
+static ssize_t conn_tx_completions(struct stuff *conn, bool err_ok,
+                                   bool check_qd)
 {
     ssize_t             ret = 0;
-    ssize_t             i;
-    uint64_t            tx_seq;
+    struct zhpeq_xq     *zxq = conn->zxq;
+    uint                i;
+    uint                nentries;
+    uint32_t            tx_seq;
+    struct enqa_msg     *msg;
     struct zhpeq_xq_cq_entry zxq_comp[64];
 
-    for (;;) {
-        ret = zhpeq_xq_cq_read(zxq, zxq_comp, ARRAY_SIZE(zxq_comp));
-        if (ret < 0) {
-            print_func_err(__func__, __LINE__, "zhpeq_xq_cq_read", "", ret);
-            goto done;
+    ret = zhpeq_xq_cq_read(zxq, zxq_comp, ARRAY_SIZE(zxq_comp));
+    if (ret < 0) {
+        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_xq_cq_read", "", ret);
+        goto done;
+    }
+    if (!ret)
+        goto done;;
+    nentries = ret;
+    ret = 0;
+    for (i = 0; i < nentries; i++) {
+        msg = zxq_comp[i].z.context;
+        timing_update(&conn->tx_cmp, get_cycles(NULL) - be64toh(msg->tx_start));
+        tx_seq = be32toh(msg->seq);
+        if (tx_seq != zxq->cq_head) {
+            conn->tx_oos++;
+            conn->tx_oos_max = max(conn->tx_oos_max,
+                                   abs(tx_seq - zxq->cq_head));
         }
-        if (!ret)
-            break;
-        for (i = 0; i < ret; i++) {
-            if (zxq_comp[i].z.status != ZHPEQ_XQ_CQ_STATUS_SUCCESS) {
-                print_err("%s,%u:index 0x%x status 0x%x\n", __func__, __LINE__,
-                          zxq_comp[i].z.index, zxq_comp[i].z.status);
-                ret = -EIO;
-                goto done;
-            }
-            tx_seq = (uintptr_t)zhq_comp[i].context;
-            if (tx_seq != conn->tx_cmp) {
-                conn->tx_cmp_oos++;
-                if (tx_seq > conn->tx_cmp) {
-                    conn->tx_cmp_oos_max = max(conn->tx_cmp_oos_max,
-                                               tx_seq - tx_cmp);
-                }
-            }
-            conn->tx_cmp++;
+        conn->tx_avail++;
+        if (zxq_comp[i].z.status != ZHPEQ_XQ_CQ_STATUS_SUCCESS) {
+            if (err_ok)
+                zhpeu_print_info("%s,%u:index 0x%x status 0x%x\n",
+                                 __func__, __LINE__,
+                                 zxq->cq_head - 1, zxq_comp[i].z.status);
+            else
+                zhpeu_print_err("%s,%u:index 0x%x status 0x%x\n",
+                                __func__, __LINE__,
+                                zxq->cq_head - 1, zxq_comp[i].z.status);
+            ret = -EIO;
+        }
+        if (check_qd && zxq_comp[i].z.qd != conn->qd_last) {
+            zhpeu_print_info("%s,%u:index 0x%x qd 0x%x\n", __func__, __LINE__,
+                             zxq->cq_head - 1, zxq_comp[i].z.status);
         }
     }
-
  done:
+
+    return ret;
+}
+
+static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
+                           uint32_t qindex, struct enqa_msg **msg_out)
+{
+    int                 ret = 0;
+    struct zhpeq_rq     *zrq = conn->zrq;
+    struct zhpe_rdm_entry *rqe = zhpeq_q_entry(zrq->rq, qindex, conn->qlen);
+    int                 rc;
+
+    *msg_out = NULL;
+    for (;;) {
+        if (conn->epoll && qindex == zrq->head) {
+            rc = zhpeq_rq_epoll((sleep_ok ? -1 : 0), NULL, false,
+                                zhpeq_rq_epoll_ring_ready, &conn->epoll_ring);
+            if (rc < 0)
+                goto done;
+            if (rc > 0) {
+                if (!zhpeu_expected_saw("cnt", 1, ret)) {
+                    ret = -EIO;
+                    goto done;
+                }
+                zrq = zhpeq_rq_epoll_ring_read(&conn->epoll_ring);
+                if (!zhpeu_expected_saw("zrq", conn->zrq, zrq)) {
+                    ret = -EIO;
+                    goto done;
+                }
+            }
+            conn->epoll = false;
+        }
+        if (zhpeq_cmp_valid(rqe, qindex, conn->qlen)) {
+            *msg_out = (void *)rqe->payload;
+            ret = 1;
+            goto done;
+        }
+        rc = zhpeq_rq_wait_check(conn->zrq, conn->poll_cycles);
+        if (unlikely(rc)) {
+            if (rc < 0) {
+                zhpeu_print_func_err(__func__, __LINE__,
+                                     "zhpeq_rq_wait_check", "", ret);
+                goto done;
+            }
+            if (rc > 0) {
+                conn->epoll = true;
+                conn->epoll_cnt++;
+            }
+        }
+        if (!sleep_ok)
+            break;
+    }
+ done:
+
+    return ret;
+}
+
+static int conn_rx_msg(struct stuff *conn, bool sleep_ok,
+                       struct enqa_msg **msg_out)
+{
+    int                 ret;
+    struct zhpeq_rq     *zrq = conn->zrq;
+    uint32_t            tx_seq;
+    uint64_t            now;
+
+    ret = conn_rx_msg_idx(conn, sleep_ok, zrq->head, msg_out);
+    if (ret > 0) {
+        tx_seq = be32toh((*msg_out)->seq);
+        if (tx_seq != zrq->head) {
+            conn->rx_oos++;
+            conn->rx_oos_max = max(conn->rx_oos_max, abs(tx_seq - zrq->head));
+        }
+        zrq->head++;
+        now = get_cycles(NULL);
+        if (conn->rx_last)
+            timing_update(&conn->rx_lat, now - conn->rx_last);
+        conn->rx_last = now;
+    }
 
     return ret;
 }
@@ -180,84 +341,112 @@ static ssize_t conn_completions(struct stuff *conn)
 static int do_server_pong(struct stuff *conn)
 {
     int                 ret = 0;
-    const struct args   *args = conn->args;
     uint                tx_flag_in = TX_NONE;
-    size_t              tx_avail = conn->tx_avail;
-    size_t              tx_off = 0;
-    size_t              rx_off = 0;
-    struct rx_queue_head rx_head = STAILQ_HEAD_INITIALIZER(rx_head);
-    struct rx_queue     *rx_ptr;
+    struct zhpe_rdm_entry *rqe;
     uint64_t            tx_count;
     uint64_t            rx_count;
     uint64_t            warmup_count;
-    uint64_t            op_count;
-    uint64_t            window;
-    uint8_t             *tx_addr;
-    volatile uint8_t    *rx_addr;
-    uint8_t             tx_flag_new;
-    uint64_t            zxq_tx_addr;
-    uint64_t            zxq_rx_addr;
+    uint64_t            i;
+    struct enqa_msg     *msg;
+    uint32_t            tx_stamp_idx;
 
-    /* Create a random receive list for copy mode */
-    if (args->copy_mode)
-        random_rx_rcv(conn, &rx_head);
+    zhpeq_print_xq_info(conn->zxq);
+    conn_tx_stats_reset(conn);
+    conn_rx_stats_reset(conn, 0);
+    /*
+     * First, the client will send conn->qlen  messages with 2 * poll_usec
+     * delay beween them to test polling on our side and qd bits on its.
+     */
+    ret = conn_rx_msg_idx(conn, true, conn->qlen, &msg);
+    if (ret < 0)
+        goto done;
+    if (!zhpeu_expected_saw("rx_msgs1", 1, ret)) {
+        ret = -EIO;
+        goto done;
+    }
+    /* Received queue is full; handshake over socket for overrun test. */
+    ret = _zhpeu_sock_send_blob(conn->sock_fd, NULL, 0);
+    if (ret < 0)
+        goto done;
+    ret = _zhpeu_sock_recv_fixed_blob(conn->sock_fd, NULL, 0);
+    if (ret < 0)
+        goto done;
 
-    /* Server starts with no ring entries available to transmit. */
-
-    for (tx_count = rx_count = warmup_count = 0;
-         tx_count != rx_count || tx_flag_in != TX_LAST; ) {
-        /* Receive packets up to window or first miss. */
-        for (window = RX_WINDOW; window > 0 && tx_flag_in != TX_LAST;
-             window--, rx_count++, rx_off = next_roff(conn, rx_off)) {
-            tx_addr = VPTR(conn->tx_addr, rx_off);
-            rx_addr = VPTR(conn->rx_addr, rx_off);
-            if (!(tx_flag_new = *rx_addr))
-                break;
-            if (tx_flag_new != tx_flag_in) {
-                if (tx_flag_in == TX_WARMUP)
-                    warmup_count = rx_count;
-                tx_flag_in = tx_flag_new;
-            }
-            *tx_addr = tx_flag_new;
-            /* If we're copying, grab an entry off the list; copy the
-             * ring entry into the data buf; and add it back to the end
-             * of the list.
-             */
-            if (args->copy_mode) {
-                rx_ptr = STAILQ_FIRST(&rx_head);
-                STAILQ_REMOVE_HEAD(&rx_head, list);
-                memcpy(rx_ptr->buf, (void *)rx_addr, args->ring_entry_len);
-                STAILQ_INSERT_TAIL(&rx_head, rx_ptr, list);
-            }
-            *(uint8_t *)rx_addr = 0;
+    /* Receive all the pending entries. */
+    for (i = 0; i < conn->qlen; i++) {
+        ret = conn_rx_msg(conn, false, &msg);
+        if (ret < 0)
+            goto done;
+        if (!zhpeu_expected_saw("rx_msgs2", 1, ret)) {
+            ret = -EIO;
+            goto done;
         }
-        /* Move along, move along. */
-        ret = do_progress(conn->zxq, &tx_avail);
+    }
+    zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max %lu/%d rx_oos/max %lu/%d\n",
+                     zhpeu_appname, conn->zxq->wq_tail, conn->zrq->head,
+                     conn->tx_oos, conn->tx_oos_max,
+                     conn->rx_oos, conn->rx_oos_max);
+
+    /* Queue is full; handshake over socket before ping-pong. */
+    ret = _zhpeu_sock_send_blob(conn->sock_fd, NULL, 0);
+    if (ret < 0)
+        goto done;
+    ret = _zhpeu_sock_recv_fixed_blob(conn->sock_fd, NULL, 0);
+    if (ret < 0)
+        goto done;
+
+    /* Server only sends as many times as it receives. */
+    conn_tx_stats_reset(conn);
+    conn_rx_stats_reset(conn, conn->rx_last);
+    for (tx_count = rx_count = warmup_count = 0, tx_stamp_idx = conn->zrq->head;
+         tx_count != rx_count || tx_flag_in != TX_LAST; ) {
+        /* Receive packets up to first miss. */
+        for (;tx_flag_in != TX_LAST; rx_count++) {
+            ret = conn_rx_msg(conn, false, &msg);
+            if (unlikely(ret < 0))
+                goto done;
+            if (!ret)
+                break;
+            if (msg->flag != tx_flag_in) {
+                if (tx_flag_in == TX_WARMUP) {
+                    warmup_count = rx_count;
+                    conn_tx_stats_reset(conn);
+                    conn_rx_stats_reset(conn, conn->rx_last);
+                }
+                tx_flag_in = msg->flag;
+            }
+        }
+        ret = conn_tx_completions(conn, false, false);
         if (ret < 0)
             goto done;
         /* Send all available buffers. */
-        for (window = TX_WINDOW; window > 0 && rx_count != tx_count && tx_avail;
-             (window--, tx_count++, tx_avail--,
-              tx_off = next_roff(conn, tx_off))) {
-            /* Reflect buffer to same offset in client.*/
-            tx_addr = VPTR(conn->tx_addr, tx_off);
-            zxq_tx_addr = conn->zxq_local_tx_zaddr + tx_off;
-            zxq_rx_addr = conn->zxq_remote_rx_zaddr + tx_off;
-            ret = zxq_write(conn->zxq, tx_addr, zxq_tx_addr,
-                            args->ring_entry_len, zxq_rx_addr);
-            if (ret < 0)
+        for (; tx_count != rx_count; tx_count++, tx_stamp_idx++) {
+            rqe = zhpeq_q_entry(conn->zrq->rq, tx_stamp_idx, conn->qlen);
+            msg = (void *)rqe->payload;
+            ret = conn_tx_msg(conn, msg->pp_start, msg->flag);
+            if (ret < 0) {
+                if (ret == -EAGAIN)
+                    break;
                 goto done;
+            }
         }
     }
-    while (tx_avail != conn->tx_avail) {
-        ret = do_progress(conn->zxq, &tx_avail);
+
+    while (conn->tx_avail != conn->qlen) {
+        ret = conn_tx_completions(conn, false, false);
         if (ret < 0)
             goto done;
     }
-    op_count = tx_count - warmup_count;
-    zhpeq_print_xq_info(conn->zxq);
-    printf("%s:op_cnt/warmup %lu/%lu\n", appname, op_count, warmup_count);
 
+    zhpeu_print_info("%s:op_cnt/warmup %lu/%lu\n",
+                     zhpeu_appname, tx_count - warmup_count, warmup_count);
+    timing_print(&conn->tx_lat, "tx_lat", 1);
+    timing_print(&conn->tx_cmp, "tx_cmp", 1);
+    timing_print(&conn->rx_lat, "rx_lat", 1);
+    zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max %lu/%d rx_oos/max %lu/%d\n",
+                     zhpeu_appname, conn->zxq->wq_tail, conn->zrq->head,
+                     conn->tx_oos, conn->tx_oos_max,
+                     conn->rx_oos, conn->rx_oos_max);
  done:
 
     return ret;
@@ -269,76 +458,108 @@ static int do_client_pong(struct stuff *conn)
     const struct args   *args = conn->args;
     uint                tx_flag_in = TX_NONE;
     uint                tx_flag_out = TX_WARMUP;
-    size_t              tx_avail = conn->tx_avail;
-    size_t              ring_avail = args->ring_entries;
-    size_t              tx_off = 0;
-    size_t              rx_off = 0;
-    size_t              tx_idx = 0;
-    size_t              rx_idx = 0;
-    uint64_t            lat_total1 = 0;
-    uint64_t            lat_total2 = 0;
-    uint64_t            lat_max2 = 0;
-    uint64_t            lat_min2 = 0;
-    uint64_t            lat_comp = 0;
-    uint64_t            lat_write = 0;
-    uint64_t            q_max1 = 0;
     uint64_t            tx_count;
     uint64_t            rx_count;
     uint64_t            warmup_count;
-    uint64_t            op_count;
-    uint64_t            window;
-    uint8_t             *tx_addr;
-    volatile uint8_t    *rx_addr;
-    uint64_t            delta;
+    uint64_t            i;
+    struct enqa_msg     *msg;
     uint64_t            start;
-    uint64_t            now;
-    uint64_t            zxq_tx_addr;
-    uint64_t            zxq_rx_addr;
+    uint64_t            delta;
 
-    start = get_cycles(NULL);
-    for (tx_count = rx_count = warmup_count = 0;
-         tx_count != rx_count || tx_flag_out != TX_LAST;) {
-        /* Receive packets up to chunk or first miss. */
-        for (window = RX_WINDOW; window > 0 && tx_flag_in != TX_LAST;
-             (window--, rx_count++, ring_avail++,
-              rx_off = next_roff(conn, rx_off))) {
-            rx_addr = VPTR(conn->rx_addr, rx_off);
-            if (!(tx_flag_in = *rx_addr))
-                break;
-            *rx_addr = 0;
-            if (!rx_off)
-                rx_idx = 0;
-            /* Reset statistics after warmup. */
-            if (rx_count == warmup_count) {
-                lat_total2 = 0;
-                lat_max2 = 0;
-                lat_min2 = ~(uint64_t)0;
-            }
-            /* Compute timestamp for entries. */
-            delta = get_cycles(NULL) - conn->ring_timestamps[rx_idx++];
-            lat_total2 += delta;
-            if (delta > lat_max2)
-                lat_max2 = delta;
-            if (delta < lat_min2)
-                lat_min2 = delta;
-        }
-        /* Move along, move along. */
-        now = get_cycles(NULL);
-        ret = do_progress(conn->zxq, &tx_avail);
-        lat_comp += get_cycles(NULL) - now;
+    zhpeq_print_xq_info(conn->zxq);
+    conn_tx_stats_reset(conn);
+    /*
+     * First, the sender will send conn->qlen messages with 2 * poll_cycles
+     * delay beween them.
+     */
+    for (i = 0; i < conn->qlen; i++) {
+        start = get_cycles(NULL);
+        do {
+            ret = conn_tx_completions(conn, false, true);
+            if (ret < 0)
+                goto done;
+        } while (get_cycles(NULL) - start < conn->poll_cycles * 2);
+        ret = conn_tx_msg(conn, 0, 0);
         if (ret < 0)
             goto done;
-        /* Send all available buffers. */
-        for (window = TX_WINDOW;
-             window > 0 && ring_avail > 0 && tx_flag_out != TX_LAST && tx_avail;
-             (window--, ring_avail--, tx_count++, tx_avail--,
-              tx_off = next_roff(conn, tx_off))) {
+    }
 
-            now = get_cycles(NULL);
+    while (conn->tx_avail != conn->qlen) {
+        ret = conn_tx_completions(conn, false, true);
+        if (ret < 0)
+            goto done;
+    }
+
+    /* Receive queue is full; handshake over socket for overrun test. */
+    ret = _zhpeu_sock_recv_fixed_blob(conn->sock_fd, NULL, 0);
+    if (ret < 0)
+        goto done;
+
+    ret = conn_tx_msg(conn, 0, 0);
+    if (ret < 0)
+        goto done;
+
+    for (;;) {
+        ret = conn_tx_completions(conn, false, true);
+        if (!ret)
+            continue;
+        if (!zhpeu_expected_saw("tx_eio", -EIO, ret))
+            goto done;
+        if (!zhpeu_expected_saw("tx_eio_avail", conn->qlen, conn->tx_avail))
+            goto done;
+        break;
+    }
+    timing_print(&conn->tx_lat, "tx_lat", 1);
+    timing_print(&conn->tx_cmp, "tx_cmp", 1);
+    zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max %lu/%d rx_oos/max %lu/%d\n",
+                     zhpeu_appname, conn->zxq->wq_tail, conn->zrq->head,
+                     conn->tx_oos, conn->tx_oos_max,
+                     conn->rx_oos, conn->rx_oos_max);
+
+
+    ret = _zhpeu_sock_send_blob(conn->sock_fd, NULL, 0);
+    if (ret < 0)
+        goto done;
+
+    /* Handshake over socket before starting ping-pong. */
+    ret = _zhpeu_sock_recv_fixed_blob(conn->sock_fd, NULL, 0);
+    if (ret < 0)
+        goto done;
+    ret = _zhpeu_sock_send_blob(conn->sock_fd, NULL, 0);
+    if (ret < 0)
+        goto done;
+
+    /* Client sends when it has available tx entries. */
+    start = get_cycles(NULL);
+    for (tx_count = rx_count = warmup_count = 0;
+         tx_count != rx_count || tx_flag_out != TX_LAST; ) {
+        /* Receive packets up to first miss. */
+        for (;tx_flag_in != TX_LAST; rx_count++) {
+            ret = conn_rx_msg(conn, false, &msg);
+            if (unlikely(ret < 0))
+                goto done;
+            if (!ret)
+                break;
+            if (msg->flag != tx_flag_in) {
+                if (tx_flag_in == TX_WARMUP) {
+                    warmup_count = rx_count;
+                    conn_rx_stats_reset(conn, conn->rx_last);
+                }
+                tx_flag_in = msg->flag;
+            }
+            timing_update(&conn->pp_lat,
+                          get_cycles(NULL) - be64toh(msg->pp_start));
+        }
+        ret = conn_tx_completions(conn, false, false);
+        if (ret < 0)
+            goto done;
+
+        /* Send all available buffers. */
+        for (; tx_flag_out != TX_LAST; tx_count++) {
 
             /* Compute delta based on cycles/ops. */
             if (args->seconds_mode)
-                delta = now - start;
+                delta = get_cycles(NULL) - start;
             else
                 delta = tx_count;
 
@@ -349,12 +570,7 @@ static int do_client_pong(struct stuff *conn)
                 if (delta < conn->ring_warmup)
                     break;
                 tx_flag_out = TX_RUNNING;
-                warmup_count = tx_count;
-                /* Reset timers/counters after warmup. */
-                lat_total1 = now;
-                lat_comp = 0;
-                lat_write = 0;
-                q_max1 = 0;
+                conn_tx_stats_reset(conn);
                 /* FALLTHROUGH */
 
             case TX_RUNNING:
@@ -362,233 +578,112 @@ static int do_client_pong(struct stuff *conn)
                     tx_flag_out = TX_LAST;
                 break;
 
+            case TX_LAST:
+                break;
+
             default:
-                print_err("%s,%u:Unexpected state %d\n",
-                          __func__, __LINE__, tx_flag_out);
+                zhpeu_print_err("%s,%u:Unexpected state %d\n",
+                                __func__, __LINE__, tx_flag_out);
                 ret = -EINVAL;
                 goto done;
             }
 
-            /* Write buffer to same offset in server.*/
-            tx_addr = VPTR(conn->tx_addr, tx_off);
-            zxq_tx_addr = conn->zxq_local_tx_zaddr + tx_off;
-            zxq_rx_addr = conn->zxq_remote_rx_zaddr + tx_off;
-            if (!tx_off)
-                tx_idx = 0;
-            /* Write op flag. */
-            *tx_addr = tx_flag_out;
-            /* Send data. */
-            now = get_cycles(NULL);
-            conn->ring_timestamps[tx_idx++] = now;
-            ret = zxq_write(conn->zxq, tx_addr, zxq_tx_addr,
-                            args->ring_entry_len, zxq_rx_addr);
-            lat_write += get_cycles(NULL) - now;
-            if (ret < 0)
+            ret = conn_tx_msg(conn, 0, msg->flag);
+            if (ret < 0) {
+                if (ret == -EAGAIN) {
+                    if (tx_flag_out == TX_LAST)
+                        tx_flag_out = TX_RUNNING;
+                    break;
+                }
                 goto done;
-        }
-        delta = tx_count - rx_count;
-        if (delta > q_max1)
-            q_max1 = delta;
-    }
-    while (tx_avail != conn->tx_avail) {
-        now = get_cycles(NULL);
-        ret = do_progress(conn->zxq, &tx_avail);
-        lat_comp += get_cycles(NULL) - now;
-        if (ret < 0)
-            goto done;
-    }
-    lat_total1 = get_cycles(NULL) - lat_total1;
-    op_count = tx_count - warmup_count;
-    zhpeq_print_xq_info(conn->zxq);
-    printf("%s:op_cnt/warmup %lu/%lu\n", appname, op_count, warmup_count);
-    printf("%s:lat ave1/ave2/min2/max2 %.3lf/%.3lf/%.3lf/%.3lf\n", appname,
-           cycles_to_usec(lat_total1, op_count * 2),
-           cycles_to_usec(lat_total2, op_count * 2),
-           cycles_to_usec(lat_min2, 2), cycles_to_usec(lat_max2, 2));
-    printf("%s:lat comp/write %.3lf/%.3lf qmax %lu\n",  appname,
-           cycles_to_usec(lat_comp, op_count),
-           cycles_to_usec(lat_write, op_count), q_max1);
-
- done:
-    return ret;
-}
-
-static int do_server_sink(struct stuff *conn)
-{
-    int                 ret = 0;
-    volatile uint8_t    *rx_addr = conn->rx_addr;
-
-    while (*rx_addr != TX_LAST)
-        yield();
-    zhpeq_print_xq_info(conn->zxq);
-
-    return ret;
-}
-
-static int do_client_unidir(struct stuff *conn)
-{
-    int                 ret = 0;
-    const struct args   *args = conn->args;
-    uint                tx_flag_out = TX_WARMUP;
-    size_t              tx_avail = conn->tx_avail;
-    size_t              tx_off = 0;
-    uint64_t            lat_total1 = 0;
-    uint64_t            lat_comp = 0;
-    uint64_t            lat_write = 0;
-    uint64_t            tx_count;
-    uint64_t            op_count;
-    uint64_t            warmup_count;
-    uint8_t             *tx_addr;
-    uint64_t            delta;
-    uint64_t            start;
-    uint64_t            now;
-    uint64_t            zxq_tx_addr;
-    uint64_t            zxq_rx_addr;
-
-    start = get_cycles(NULL);
-    for (tx_count = warmup_count = 0; tx_flag_out != TX_LAST;
-         tx_count++, tx_avail--, tx_off = next_roff(conn, tx_off)) {
-
-        /* Move along, move along. */
-        now = get_cycles(NULL);
-        ret = do_progress(conn->zxq, &tx_avail);
-        lat_comp += get_cycles(NULL) - now;
-        if (ret < 0)
-            goto done;
-
-        /* Compute delta based on cycles/ops. */
-        if (args->seconds_mode)
-            delta = now - start;
-        else
-            delta = tx_count;
-
-        /* Handle switching between warmup/running/last. */
-        switch (tx_flag_out) {
-
-        case TX_WARMUP:
-            if (delta < conn->ring_warmup)
-                break;
-            tx_flag_out = TX_RUNNING;
-            warmup_count = tx_count;
-            /* Reset timers/counters after warmup. */
-            lat_total1 = get_cycles(NULL);
-            lat_comp = 0;
-            lat_write = 0;
-            /* FALLTHROUGH */
-
-        case TX_RUNNING:
-            if  (delta >= conn->ring_ops - 1) {
-                tx_flag_out = TX_LAST;
-                /* Force the last packet to use the first entry. */
-                tx_off = 0;
             }
-            break;
-
-        default:
-            print_err("%s,%u:Unexpected state %d\n",
-                      __func__, __LINE__, tx_flag_out);
-            ret = -EINVAL;
-            goto done;
         }
+    }
 
-        /* Write buffer to same offset in server.*/
-        tx_addr = VPTR(conn->tx_addr, tx_off);
-        zxq_tx_addr = conn->zxq_local_tx_zaddr + tx_off;
-        zxq_rx_addr = conn->zxq_remote_rx_zaddr + tx_off;
-        /* Write op flag. */
-        *tx_addr = tx_flag_out;
-        ret = zxq_write(conn->zxq, tx_addr, zxq_tx_addr, args->ring_entry_len,
-                       zxq_rx_addr);
-        now = get_cycles(NULL);
-        lat_write += get_cycles(NULL) - now;
-        if (ret < 0)
-            goto done;
-    }
-    while (tx_avail != conn->tx_avail) {
-        now = get_cycles(NULL);
-        ret = do_progress(conn->zxq, &tx_avail);
-        lat_comp += get_cycles(NULL) - now;
-        if (ret < 0)
-            goto done;
-    }
-    lat_total1 = get_cycles(NULL) - lat_total1;
-    op_count = tx_count - warmup_count;
     zhpeq_print_xq_info(conn->zxq);
-    printf("%s:op_cnt/warmup %lu/%lu\n", appname, op_count, warmup_count);
-    printf("%s:lat ave1 %.3lf\n", appname,
-           cycles_to_usec(lat_total1, op_count));
-    printf("%s:lat comp/write %.3lf/%.3lf\n", appname,
-           cycles_to_usec(lat_comp, op_count),
-           cycles_to_usec(lat_write, op_count));
-
+    zhpeu_print_info("%s:op_cnt/warmup %lu/%lu\n",
+                     zhpeu_appname, tx_count - warmup_count, warmup_count);
+    timing_print(&conn->pp_lat, "pp_lat", 2);
+    timing_print(&conn->tx_lat, "tx_lat", 1);
+    timing_print(&conn->tx_cmp, "tx_cmp", 1);
+    timing_print(&conn->rx_lat, "rx_lat", 1);
+    zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max %lu/%d rx_oos/max %lu/%d\n",
+                     zhpeu_appname, conn->zxq->wq_tail, conn->zrq->head,
+                     conn->tx_oos, conn->tx_oos_max,
+                     conn->rx_oos, conn->rx_oos_max);
  done:
     return ret;
 }
 
-int do_zxq_setup(struct stuff *conn)
+int do_q_setup(struct stuff *conn)
 {
     int                 ret;
     const struct args   *args = conn->args;
     union sockaddr_in46 sa;
     size_t              sa_len = sizeof(sa);
-    struct zhpeq_attr   zxq_attr;
+    struct zhpeq_attr   attr;
 
-    ret = zhpeq_query_attr(&zxq_attr);
+    ret = zhpeq_query_attr(&attr);
     if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_query_attr", "", ret);
+        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_query_attr", "", ret);
         goto done;
     }
 
     ret = -EINVAL;
-    conn->tx_avail = args->tx_avail;
-    if (conn->tx_avail) {
-        if (conn->tx_avail > zxq_attr.z.max_tx_qlen)
+    conn->qlen = args->qlen;
+    if (conn->qlen) {
+        if (conn->qlen > attr.z.max_tx_qlen)
             goto done;
     } else
-        conn->tx_avail = ZXQ_LEN;
+        conn->qlen = DEFAULT_QLEN;
+
+    conn->poll_cycles = usec_to_cycles(args->poll_usec ?: DEFAULT_POLL);
 
     /* Allocate domain. */
     ret = zhpeq_domain_alloc(&conn->zdom);
     if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_domain_alloc", "", ret);
+        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_domain_alloc", "", ret);
         goto done;
     }
     /* Allocate zqueues. */
-    ret = zhpeq_xq_alloc(conn->zdom, conn->tx_avail + 1, conn->tx_avail + 1,
+    ret = zhpeq_xq_alloc(conn->zdom, conn->qlen, conn->qlen,
                          0, 0, 0,  &conn->zxq);
     if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_xq_qalloc", "", ret);
+        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_xq_alloc", "", ret);
         goto done;
     }
 
-    ret = zhpeq_rq_alloc(conn->zdom, 1, 0, &conn->zrq);
+    ret = zhpeq_rq_alloc(conn->zdom, conn->qlen, 0, &conn->zrq);
     if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_rq_qalloc", "", ret);
+        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_rq_alloc", "", ret);
         goto done;
     }
+    conn->qlen = conn->zxq->xqinfo.cmdq.ent - 1;
+    conn->tx_avail = conn->qlen;
 
     /* Get address index. */
     ret = zhpeq_rq_xchg_addr(conn->zrq, conn->sock_fd, &sa, &sa_len);
     if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_xq_xchg_addr",
-                       "", ret);
+        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_xq_xchg_addr", "", ret);
         goto done;
     }
+    if (!zhpeu_expected_saw("sa_family", zhpeu_sockaddr_family(&sa), AF_ZHPE)) {
+        ret = -EIO;
+        goto done;
+    }
+    conn->dgcid = zhpeu_uuid_to_gcid(sa.zhpe.sz_uuid);
+    conn->rspctxid = sa.zhpe.sz_queue;
+
+    /* Do setup for remote. */
     ret = zhpeq_xq_backend_open(conn->zxq, &sa);
     if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_xq_backend_open", "", ret);
+        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_xq_backend_open",
+                             "", ret);
         goto done;
     }
     conn->open_idx = ret;
-    /* Now let's exchange the memory parameters to the other side. */
-    ret = do_mem_setup(conn);
-    if (ret < 0)
-        goto done;
-    ret = do_mem_xchg(conn);
-    if (ret < 0)
-        goto done;
-
  done:
+
     return ret;
 }
 
@@ -605,36 +700,31 @@ static int do_server_one(const struct args *oargs, int conn_fd)
     struct cli_wire_msg cli_msg;
 
     /* Let's take a moment to get the client parameters over the socket. */
-    ret = sock_recv_fixed_blob(conn.sock_fd, &cli_msg, sizeof(cli_msg));
+    ret = _zhpeu_sock_recv_fixed_blob(conn.sock_fd, &cli_msg, sizeof(cli_msg));
     if (ret < 0)
         goto done;
 
-    args->ring_entry_len = be64toh(cli_msg.ring_entry_len);
-    args->ring_entries = be64toh(cli_msg.ring_entries);
-    args->tx_avail = be64toh(cli_msg.tx_avail);
-    args->aligned_mode = !!cli_msg.aligned_mode;
-    args->copy_mode = !!cli_msg.copy_mode;
+    args->qlen = be64toh(cli_msg.qlen);
+    args->poll_usec = be64toh(cli_msg.poll_usec);
     args->once_mode = !!cli_msg.once_mode;
-    args->unidir_mode = !!cli_msg.unidir_mode;
 
     /* Dummy for ordering. */
-    ret = sock_send_blob(conn.sock_fd, NULL, 0);
+    ret = _zhpeu_sock_send_blob(conn.sock_fd, NULL, 0);
     if (ret < 0)
         goto done;
 
-    ret = do_zxq_setup(&conn);
+    ret = do_q_setup(&conn);
     if (ret < 0)
         goto done;
 
-    if (args->unidir_mode)
-        ret = do_server_sink(&conn);
-    else
-        ret = do_server_pong(&conn);
+    /* Run test. */
+    ret = do_server_pong(&conn);
+
     /* Completion handshake. */
-    ret = sock_recv_fixed_blob(conn.sock_fd, NULL, 0);
+    ret = _zhpeu_sock_recv_fixed_blob(conn.sock_fd, NULL, 0);
     if (ret < 0)
         goto done;
-    ret = sock_send_blob(conn.sock_fd, NULL, 0);
+    ret = _zhpeu_sock_send_blob(conn.sock_fd, NULL, 0);
     if (ret < 0)
         goto done;
 
@@ -655,39 +745,39 @@ static int do_server(const struct args *args)
     struct addrinfo     *resp = NULL;
     int                 oflags = 1;
 
-    ret = do_getaddrinfo(NULL, args->service,
-                         AF_INET6, SOCK_STREAM, true, &resp);
+    ret = _zhpeu_sock_getaddrinfo(NULL, args->service,
+                                  AF_INET6, SOCK_STREAM, true, &resp);
     if (ret < 0)
         goto done;
     listener_fd = socket(resp->ai_family, resp->ai_socktype,
                          resp->ai_protocol);
     if (listener_fd == -1) {
         ret = -errno;
-        print_func_err(__func__, __LINE__, "socket", "", ret);
+        zhpeu_print_func_err(__func__, __LINE__, "socket", "", ret);
         goto done;
     }
     if (setsockopt(listener_fd, SOL_SOCKET, SO_REUSEADDR,
                    &oflags, sizeof(oflags)) == -1) {
         ret = -errno;
-        print_func_err(__func__, __LINE__, "setsockopt", "", ret);
+        zhpeu_print_func_err(__func__, __LINE__, "setsockopt", "", ret);
         goto done;
     }
     /* None of the usual: no polling; no threads; no cloexec; no nonblock. */
     if (bind(listener_fd, resp->ai_addr, resp->ai_addrlen) == -1) {
         ret = -errno;
-        print_func_err(__func__, __LINE__, "bind", "", ret);
+        zhpeu_print_func_err(__func__, __LINE__, "bind", "", ret);
         goto done;
     }
     if (listen(listener_fd, BACKLOG) == -1) {
         ret = -errno;
-        print_func_err(__func__, __LINE__, "listen", "", ret);
+        zhpeu_print_func_err(__func__, __LINE__, "listen", "", ret);
         goto done;
     }
     for (ret = 0; !ret;) {
         conn_fd = accept(listener_fd, NULL, NULL);
         if (conn_fd == -1) {
             ret = -errno;
-            print_func_err(__func__, __LINE__, "accept", "", ret);
+            zhpeu_print_func_err(__func__, __LINE__, "accept", "", ret);
             goto done;
         }
         ret = do_server_one(args, conn_fd);
@@ -713,30 +803,26 @@ static int do_client(const struct args *args)
     };
     struct cli_wire_msg cli_msg;
 
-    ret = connect_sock(args->node, args->service);
+    ret = _zhpeu_sock_connect(args->node, args->service);
     if (ret < 0)
         goto done;
     conn.sock_fd = ret;
 
     /* Write the ring parameters to the server. */
-    cli_msg.ring_entry_len = htobe64(args->ring_entry_len);
-    cli_msg.ring_entries = htobe64(args->ring_entries);
-    cli_msg.tx_avail = htobe64(args->tx_avail);
-    cli_msg.aligned_mode = args->aligned_mode;
-    cli_msg.copy_mode = args->copy_mode;
+    cli_msg.qlen = htobe64(args->qlen);
+    cli_msg.poll_usec = htobe64(args->poll_usec);
     cli_msg.once_mode = args->once_mode;
-    cli_msg.unidir_mode = args->unidir_mode;
 
-    ret = sock_send_blob(conn.sock_fd, &cli_msg, sizeof(cli_msg));
+    ret = _zhpeu_sock_send_blob(conn.sock_fd, &cli_msg, sizeof(cli_msg));
     if (ret < 0)
         goto done;
 
     /* Dummy for ordering. */
-    ret = sock_recv_fixed_blob(conn.sock_fd, NULL, 0);
+    ret = _zhpeu_sock_recv_fixed_blob(conn.sock_fd, NULL, 0);
     if (ret < 0)
         goto done;
 
-    ret = do_zxq_setup(&conn);
+    ret = do_q_setup(&conn);
     if (ret < 0)
         goto done;
 
@@ -750,23 +836,19 @@ static int do_client(const struct args *args)
         conn.ring_ops *= get_tsc_freq();
     } else if (conn.ring_warmup == SIZE_MAX) {
         conn.ring_warmup = conn.ring_ops / 10;
-        if (conn.ring_warmup < args->ring_entries)
-            conn.ring_warmup = args->ring_entries;
-        if (conn.ring_warmup < WARMUP_MIN)
-            conn.ring_warmup = WARMUP_MIN;
+        if (conn.ring_warmup < DEFAULT_WARMUP)
+            conn.ring_warmup = DEFAULT_WARMUP;
         conn.ring_ops += conn.ring_warmup;
     }
 
-    /* Send ops */
-    if (args->unidir_mode)
-        ret = do_client_unidir(&conn);
-    else
-        ret = do_client_pong(&conn);
+    /* Run test. */
+    ret = do_client_pong(&conn);
+
     /* Completion handshake. */
-    ret = sock_send_blob(conn.sock_fd, NULL, 0);
+    ret = _zhpeu_sock_send_blob(conn.sock_fd, NULL, 0);
     if (ret < 0)
         goto done;
-    ret = sock_recv_fixed_blob(conn.sock_fd, NULL, 0);
+    ret = _zhpeu_sock_recv_fixed_blob(conn.sock_fd, NULL, 0);
     if (ret < 0)
         goto done;
 
@@ -780,28 +862,21 @@ static void usage(bool help) __attribute__ ((__noreturn__));
 
 static void usage(bool help)
 {
-    print_usage(
+    zhpeu_print_usage(
         help,
-        "Usage:%s [-acosu] [-t <txqlen>] [-b <address>]\n"
-        "    <port> [<node> <entry_len> <ring_entries>"
-        " <op_count/seconds>]\n"
+        "Usage:%s [-os] ] -p <poll_usec> ] [-q <qlen>] [-w <warmup_ops]\n"
+        "    <port> [<node> <op_count/seconds>]\n"
         "All sizes may be postfixed with [kmgtKMGT] to specify the"
         " base units.\n"
         "Lower case is base 10; upper case is base 2.\n"
         "Server requires just port; client requires all 5 arguments.\n"
         "Client only options:\n"
-        " -a : cache line align entries\n"
-        " -b <address> : try to allocate buffer at address\n"
-        " -c : copy mode\n"
         " -o : run once and then server will exit\n"
         " -s : treat the final argument as seconds\n"
-        " -t <txqlen> : length of tx request queue\n"
-        " -u : uni-directional client-to-server traffic (no copy)\n"
-        " -w <ops> : number of warmup operations\n"
-        "Uses ASIC backend unless environment variable\n"
-        "ZHPE_BACKEND_LIBFABRIC_PROV is set.\n"
-        "ZHPE_BACKEND_LIBFABRIC_DOM can be used to set a specific domain\n",
-        appname);
+        " -p <poll_usec> : length of receive polling before sleeping\n"
+        " -q <qlen> : tx and rx queue length\n"
+        " -w <ops> : number of warmup operations\n",
+        zhpeu_appname);
 
     if (help)
         zhpeq_print_xq_info(NULL);
@@ -819,49 +894,45 @@ int main(int argc, char **argv)
     int                 opt;
     int                 rc;
 
-    zhpeq_util_init(argv[0], LOG_INFO, false);
+    zhpeu_util_init(argv[0], LOG_INFO, false);
 
     rc = zhpeq_init(ZHPEQ_API_VERSION);
     if (rc < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_init", "", rc);
+        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_init", "", rc);
         goto done;
     }
 
     if (argc == 1)
         usage(true);
 
-    while ((opt = getopt(argc, argv, "ab:cost:uw:")) != -1) {
+    while ((opt = getopt(argc, argv, "op:q:sw:")) != -1) {
 
         /* All opts are client only, now. */
         client_opt = true;
 
         switch (opt) {
 
-        case 'a':
-            if (args.aligned_mode)
-                usage(false);
-            args.aligned_mode = true;
-            break;
-
-        case 'b':
-            if (args.bufaddr)
-                usage(false);
-            if (parse_kb_uint64_t(__func__, __LINE__, "bufaddr",
-                                  optarg, &args.bufaddr, 0, 1,
-                                  SIZE_MAX, PARSE_KB | PARSE_KIB) < 0)
-                usage(false);
-            break;
-
-        case 'c':
-            if (args.copy_mode)
-                usage(false);
-            args.copy_mode = true;
-            break;
-
         case 'o':
             if (args.once_mode)
                 usage(false);
             args.once_mode = true;
+            break;
+
+        case 'p':
+            if (args.poll_usec)
+                usage(false);
+            if (_zhpeu_parse_kb_uint64_t("poll_usec", optarg, &args.poll_usec,
+                                         0, 1, SIZE_MAX,
+                                         PARSE_KB | PARSE_KIB) < 0)
+                usage(false);
+            break;
+
+        case 'q':
+            if (args.qlen)
+                usage(false);
+            if (_zhpeu_parse_kb_uint64_t("qlen", optarg, &args.qlen, 0, 1,
+                                         SIZE_MAX, PARSE_KB | PARSE_KIB) < 0)
+                usage(false);
             break;
 
         case 's':
@@ -870,27 +941,12 @@ int main(int argc, char **argv)
             args.seconds_mode = true;
             break;
 
-        case 't':
-            if (args.tx_avail)
-                usage(false);
-            if (parse_kb_uint64_t(__func__, __LINE__, "tx_avail",
-                                  optarg, &args.tx_avail, 0, 1,
-                                  SIZE_MAX, PARSE_KB | PARSE_KIB) < 0)
-                usage(false);
-            break;
-
-        case 'u':
-            if (args.unidir_mode)
-                usage(false);
-            args.unidir_mode = true;
-            break;
-
         case 'w':
             if (args.warmup != SIZE_MAX)
                 usage(false);
-            if (parse_kb_uint64_t(__func__, __LINE__, "warmup",
-                                  optarg, &args.warmup, 0, 0,
-                                  SIZE_MAX - 1, PARSE_KB | PARSE_KIB) < 0)
+            if (_zhpeu_parse_kb_uint64_t("warmup", optarg, &args.warmup, 0, 0,
+                                         SIZE_MAX - 1,
+                                         PARSE_KB | PARSE_KIB) < 0)
                 usage(false);
             break;
 
@@ -899,9 +955,6 @@ int main(int argc, char **argv)
 
         }
     }
-
-    if (args.copy_mode && args.unidir_mode)
-        usage(false);
 
     opt = argc - optind;
 
@@ -914,18 +967,11 @@ int main(int argc, char **argv)
     } else if (opt == 5) {
         args.service = argv[optind++];
         args.node = argv[optind++];
-        if (parse_kb_uint64_t(__func__, __LINE__, "entry_len",
-                              argv[optind++], &args.ring_entry_len, 0,
-                              sizeof(uint8_t), SIZE_MAX,
-                              PARSE_KB | PARSE_KIB) < 0 ||
-            parse_kb_uint64_t(__func__, __LINE__, "ring_entries",
-                              argv[optind++], &args.ring_entries, 0, 1,
-                              SIZE_MAX, PARSE_KB | PARSE_KIB) < 0 ||
-            parse_kb_uint64_t(__func__, __LINE__,
-                              (args.seconds_mode ? "seconds" : "op_counts"),
-                              argv[optind++], &args.ring_ops, 0, 1,
-                              (args.seconds_mode ? 1000000 : SIZE_MAX),
-                              PARSE_KB | PARSE_KIB) < 0)
+        if (_zhpeu_parse_kb_uint64_t(
+                (args.seconds_mode ? "seconds" : "op_counts"),
+                argv[optind++], &args.ring_ops, 0, 1,
+                (args.seconds_mode ? 1000000 : SIZE_MAX),
+                PARSE_KB | PARSE_KIB) < 0)
             usage(false);
         if (do_client(&args) < 0)
             goto done;

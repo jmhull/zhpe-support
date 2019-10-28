@@ -283,6 +283,7 @@ static inline void qcmwrite64(uint64_t value, volatile void *qcm, size_t off)
 }
 
 int32_t zhpeq_xq_reserve(struct zhpeq_xq *zxq, void *context);
+
 void zhpeq_xq_commit(struct zhpeq_xq *zxq);
 
 static inline void zhpeq_xq_insert(struct zhpeq_xq *zxq, int32_t reservation,
@@ -401,12 +402,18 @@ int zhpeq_rq_free(struct zhpeq_rq *zrq);
 int zhpeq_rq_alloc(struct zhpeq_dom *zdom, int rx_qlen, int slice_mask,
                    struct zhpeq_rq **zrq_out);
 
+static inline void *zhpeq_q_entry(void *entries, uint32_t qindex,
+                                  uint32_t qmask)
+{
+    return VPTR(entries, ZHPE_HW_ENTRY_LEN * (qindex & qmask));
+}
+
 static inline struct zhpe_rdm_entry *zhpeq_rq_valid(struct zhpeq_rq *zrq,
                                                     bool increment)
 {
     uint32_t            qmask = zrq->rqinfo.cmplq.ent - 1;
     uint32_t            qindex = zrq->head;
-    struct zhpe_rdm_entry *rqe = &zrq->rq[qindex & qmask].entry;
+    struct zhpe_rdm_entry *rqe = zhpeq_q_entry(zrq->rq, qindex, qmask);
 
     if (zhpeq_cmp_valid(rqe, qindex, qmask)) {
         if (increment)
@@ -430,6 +437,16 @@ int zhpeq_rq_epoll_ring_init(struct zhpeq_rq_epoll_ring *zrqring,
                              size_t ring_size);
 
 int zhpeq_rq_epoll_ring_ready(void *varg, struct zhpeq_rq *zrq);
+
+static inline
+struct zhpeq_rq *zhpeq_rq_epoll_ring_read(struct zhpeq_rq_epoll_ring *zrqring)
+{
+    assert ((int32_t)(zrqring->rq_wr - zrqring->rq_rd) >= 0);
+    if (zrqring->rq_wr == zrqring->rq_rd)
+        return NULL;
+
+    return zrqring->rq[zrqring->rq_rd++ & zrqring->rq_msk];
+}
 
 int zhpeq_rq_epoll_deinit(void);
 
