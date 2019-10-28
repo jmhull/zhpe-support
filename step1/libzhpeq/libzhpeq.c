@@ -845,6 +845,7 @@ int zhpeq_rq_wait_check(struct zhpeq_rq *zrq, uint64_t poll_cycles)
     if (!zrq)
         goto done;
 
+    ret = 0;
     now = get_cycles(NULL);
     if (zrq->rx_poll_start_head != zrq->head) {
         zrq->rx_poll_start_head = zrq->head;

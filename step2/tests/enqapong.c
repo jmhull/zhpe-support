@@ -299,7 +299,7 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
         if (unlikely(rc)) {
             if (rc < 0) {
                 zhpeu_print_func_err(__func__, __LINE__,
-                                     "zhpeq_rq_wait_check", "", ret);
+                                     "zhpeq_rq_wait_check", "", rc);
                 goto done;
             }
             if (rc > 0) {
