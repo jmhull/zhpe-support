@@ -588,6 +588,9 @@ static int zhpe_rq_epoll_add(struct zhpeq_rqi *rqi)
     if (epoll_irq[irq].count++)
         goto done;
 
+    epoll_irq[irq].qnum = qnum & ~(rqi->zrq.rqinfo.clump - 1);
+    epoll_irq[irq].clump = rqi->zrq.rqinfo.clump;
+
     fname = _zhpeu_asprintf("%s_poll_%u", DEV_NAME, irq);
     if (!fname) {
         ret = -ENOMEM;
