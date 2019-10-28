@@ -997,7 +997,7 @@ void *zhpeu_sockaddr_dup(const void *addr)
 
 uint32_t zhpeu_uuid_to_gcid(const uuid_t uuid)
 {
-    return (uuid[0] << 20) | (uuid[1] << 12) | (uuid[3] << 4) | (uuid[3]  >> 4);
+    return (uuid[0] << 20) | (uuid[1] << 12) | (uuid[2] << 4) | (uuid[3]  >> 4);
 }
 
 void zhpeu_install_gcid_in_uuid(uuid_t uuid, uint32_t gcid)
