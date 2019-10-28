@@ -87,10 +87,6 @@ struct stuff {
     int                 sock_fd;
     size_t              ring_ops;
     size_t              ring_warmup;
-    size_t              tx_avail;
-    size_t              qlen;
-    uint32_t            dgcid;
-    uint32_t            rspctxid;
     uint32_t            tx_seq;
     int                 tx_oos_max;
     int                 rx_oos_max;
@@ -104,6 +100,10 @@ struct stuff {
     struct timing       rx_lat;
     struct timing       pp_lat;
     struct zhpeq_rq_epoll_ring epoll_ring;
+    size_t              tx_avail;
+    size_t              qlen;
+    uint32_t            dgcid;
+    uint32_t            rspctxid;
     int                 open_idx;
     uint8_t             qd_last;
     bool                epoll;
@@ -129,7 +129,7 @@ static void timing_update(struct timing *t, uint64_t cycles)
 {
     t->tot += cycles;
     t->min = min(t->min, cycles);
-    t->max = min(t->max, cycles);
+    t->max = max(t->max, cycles);
     t->cnt++;
 }
 
@@ -249,7 +249,8 @@ static ssize_t conn_tx_completions(struct stuff *conn, bool qfull_ok,
                                 zxq->cq_head - 1, zxq_comp[i].z.status);
             ret = -EIO;
         }
-        if (check_qd && zxq_comp[i].z.qd != conn->qd_last) {
+        /* if (check_qd && zxq_comp[i].z.qd != conn->qd_last) */
+        if (zxq_comp[i].z.qd) {
             zhpeu_print_info("%s,%u:index 0x%x qd 0x%x\n", __func__, __LINE__,
                              zxq->cq_head - 1, zxq_comp[i].z.status);
             conn->qd_last = zxq_comp[i].z.qd;
@@ -662,7 +663,6 @@ int do_q_setup(struct stuff *conn)
     }
     conn->qlen = conn->zxq->xqinfo.cmdq.ent - 1;
     conn->tx_avail = conn->qlen;
-    conn->epoll = true;
 
     /* Get address index. */
     ret = zhpeq_rq_xchg_addr(conn->zrq, conn->sock_fd, &sa, &sa_len);
@@ -685,6 +685,15 @@ int do_q_setup(struct stuff *conn)
         goto done;
     }
     conn->open_idx = ret;
+
+    /* Initalize epoll_ring. */
+    ret = zhpeq_rq_epoll_ring_init(&conn->epoll_ring, 4);
+    if (ret < 0) {
+        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_rq_epoll_ring",
+                             "", ret);
+        goto done;
+    }
+    conn->epoll = true;
  done:
 
     return ret;
