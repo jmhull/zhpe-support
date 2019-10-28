@@ -714,17 +714,15 @@ int zhpeq_rq_free(struct zhpeq_rq *zrq)
     ret = 0;
     /* Unmap qcm and rq. */
     rc = _zhpeu_munmap((void *)zrq->qcm, zrq->rqinfo.qcm.size);
-    if (ret >= 0 && rc < 0)
-        ret = rc;
+    ret = zhpeu_update_error(ret, rc);
+
     rc = _zhpeu_munmap((void *)zrq->rq, zrq->rqinfo.cmplq.size);
-    if (ret >= 0 && rc < 0)
-        ret = rc;
+    ret = zhpeu_update_error(ret, rc);
 
     /* Call the driver to free the queue. */
     if (zrq->rqinfo.qcm.size) {
         rc = zhpe_rq_free(rqi);
-        if (ret >= 0 && rc < 0)
-            ret = rc;
+        ret = zhpeu_update_error(ret, rc);
     }
 
     /* Free queue memory. */
