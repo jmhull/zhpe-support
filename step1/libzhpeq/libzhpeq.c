@@ -1410,6 +1410,15 @@ static uint wq_index(union zhpe_hw_wq_entry *wqe)
     return wqe->hdr.cmp_index;
 }
 
+static void wq_print_enq(union zhpe_hw_wq_entry *wqe, uint i, const char *opstr)
+{
+    struct zhpe_hw_wq_enqa *enq = &wqe->enqa;
+
+    fprintf(stderr, "%7d:%-7s:f %u idx 0x%04x dgcid 0x%x rspctxid 0x%x\n",
+            i, opstr, wq_fence(wqe), wq_index(wqe),
+            enq->dgcid, enq->rspctxid);
+}
+
 static void wq_print_imm(union zhpe_hw_wq_entry *wqe, uint i, const char *opstr)
 {
     struct zhpe_hw_wq_imm *imm = &wqe->imm;
@@ -1453,6 +1462,10 @@ static void wq_print(union zhpe_hw_wq_entry *wqe, uint i)
     case ZHPE_HW_OPCODE_NOP:
         fprintf(stderr, "%7d:%-7s:f %u idx 0x%04x\n",
                 i, "NOP", wq_fence(wqe), wq_index(wqe));
+        break;
+
+    case ZHPE_HW_OPCODE_ENQA:
+        wq_print_enq(wqe, i, "ENQA");
         break;
 
     case ZHPE_HW_OPCODE_GETIMM:
