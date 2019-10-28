@@ -423,7 +423,7 @@ char *zhpeu_sockaddr_str(const void *addr);
     typeof(&__e)        __p MAYBE_UNUSED = &__s;                \
                                                                 \
     __ret = (__e == __s);                                       \
-    if (!__ret) {                                               \
+    if (unlikely(!__ret)) {                                     \
         zhpeu_print_err("%s,%u:%s expected 0x%llx, "            \
                         " saw 0x%llx\n", __func__, __LINE__,    \
                         __lbl, (ullong)__e, (ullong)__s);       \

@@ -285,9 +285,7 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
                     break;
                 }
                 conn->epoll = false;
-            } else if (ret < 0)
-                break;
-            else
+            } else
                 break;
         }
         if (zhpeq_cmp_valid(rqe, qindex, conn->qlen)) {
