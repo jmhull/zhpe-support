@@ -272,12 +272,10 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
 
     *msg_out = NULL;
     for (;;) {
-        if (conn->epoll && qindex == zrq->head) {
+        if (conn->epoll) {
             rc = zhpeq_rq_epoll((sleep_ok ? -1 : 0), NULL, false,
                                 zhpeq_rq_epoll_ring_ready, &conn->epoll_ring);
-            if (rc < 0)
-                goto done;
-            if (rc > 0) {
+            if (likely(rc > 0)) {
                 if (!zhpeu_expected_saw("cnt", 1, rc)) {
                     ret = -EIO;
                     goto done;
@@ -288,7 +286,10 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
                     goto done;
                 }
                 conn->epoll = false;
-            }
+            } else if (rc < 0)
+                goto done;
+            else
+                break;
         }
         if (zhpeq_cmp_valid(rqe, qindex, conn->qlen)) {
             *msg_out = (void *)rqe->payload;
@@ -296,7 +297,7 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
             goto done;
         }
         rc = zhpeq_rq_wait_check(conn->zrq, conn->poll_cycles);
-        if (likely(rc)) {
+        if (unlikely(rc)) {
             if (rc < 0) {
                 zhpeu_print_func_err(__func__, __LINE__,
                                      "zhpeq_rq_wait_check", "", rc);
