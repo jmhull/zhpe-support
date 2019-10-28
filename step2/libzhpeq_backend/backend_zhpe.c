@@ -485,14 +485,14 @@ static int zhpe_rq_epoll_init(void)
     if (epoll_fd != -1)
         goto done;
 
-    if ((epoll_create1(EPOLL_CLOEXEC)) == -1) {
+    if ((ret = epoll_create1(EPOLL_CLOEXEC)) == -1) {
         ret = -errno;
         zhpeu_print_func_err(__func__, __LINE__, "epoll_create1", "", ret);
         goto done;
     }
     epoll_fd = ret;
 
-    if ((pipe2(epoll_pipe_fds, O_CLOEXEC | O_NONBLOCK)) == -1) {
+    if (pipe2(epoll_pipe_fds, O_CLOEXEC | O_NONBLOCK) == -1) {
         ret = -errno;
         epoll_pipe_fds[0] = -1;
         epoll_pipe_fds[1] = -1;
