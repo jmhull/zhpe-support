@@ -185,7 +185,7 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start, uint8_t flag)
 {
     int32_t             ret;
     struct zhpeq_xq     *zxq = conn->zxq;
-    uint64_t            now = get_cycles(NULL);
+    uint64_t            start = get_cycles(NULL);
     struct enqa_msg     *msg;
 
     ret = zhpeq_xq_reserve(zxq);
@@ -197,7 +197,7 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start, uint8_t flag)
     }
     msg = zhpeq_xq_enqa(zxq, ret, 0, conn->dgcid, conn->rspctxid);
     zhpeq_xq_set_context(zxq, ret, msg);
-    msg->tx_start = htobe64(now);
+    msg->tx_start = htobe64(start);
     if (!pp_start)
         pp_start = msg->tx_start;
     msg->pp_start = pp_start;
@@ -206,6 +206,7 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start, uint8_t flag)
     zhpeq_xq_insert(zxq, ret, false);
     zhpeq_xq_commit(zxq);
     conn->tx_avail--;
+    timing_update(&conn->tx_lat, get_cycles(NULL) - start);
  done:
 
     return ret;
