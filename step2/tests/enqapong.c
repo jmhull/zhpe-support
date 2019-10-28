@@ -360,7 +360,7 @@ static int do_server_pong(struct stuff *conn)
      * First, the client will send conn->qlen  messages with 2 * poll_usec
      * delay beween them to test polling on our side and qd bits on its.
      */
-    ret = conn_rx_msg_idx(conn, true, conn->qlen, &msg);
+    ret = conn_rx_msg_idx(conn, true, conn->zrq->head + conn->qlen - 1, &msg);
     if (ret < 0)
         goto done;
     if (!zhpeu_expected_saw("rx_msgs1", 1, ret)) {
@@ -664,6 +664,7 @@ int do_q_setup(struct stuff *conn)
     }
     conn->qlen = conn->zxq->xqinfo.cmdq.ent - 1;
     conn->tx_avail = conn->qlen;
+    conn->epoll = true;
 
     /* Get address index. */
     ret = zhpeq_rq_xchg_addr(conn->zrq, conn->sock_fd, &sa, &sa_len);
