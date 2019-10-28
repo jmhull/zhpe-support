@@ -277,7 +277,7 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
             if (rc < 0)
                 goto done;
             if (rc > 0) {
-                if (!zhpeu_expected_saw("cnt", 1, ret)) {
+                if (!zhpeu_expected_saw("cnt", 1, rc)) {
                     ret = -EIO;
                     goto done;
                 }
