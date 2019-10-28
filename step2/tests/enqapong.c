@@ -210,7 +210,7 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start, uint8_t flag)
     return ret;
 }
 
-static ssize_t conn_tx_completions(struct stuff *conn, bool err_ok,
+static ssize_t conn_tx_completions(struct stuff *conn, bool qfull_ok,
                                    bool check_qd)
 {
     ssize_t             ret = 0;
@@ -241,11 +241,8 @@ static ssize_t conn_tx_completions(struct stuff *conn, bool err_ok,
         }
         conn->tx_avail++;
         if (zxq_comp[i].z.status != ZHPEQ_XQ_CQ_STATUS_SUCCESS) {
-            if (err_ok)
-                zhpeu_print_info("%s,%u:index 0x%x status 0x%x\n",
-                                 __func__, __LINE__,
-                                 zxq->cq_head - 1, zxq_comp[i].z.status);
-            else
+            if (!qfull_ok ||
+                zxq_comp[i].z.status != ZHPE_HW_CQ_STATUS_GENZ_RDM_QUEUE_FULL)
                 zhpeu_print_err("%s,%u:index 0x%x status 0x%x\n",
                                 __func__, __LINE__,
                                 zxq->cq_head - 1, zxq_comp[i].z.status);
