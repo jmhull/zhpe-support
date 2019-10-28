@@ -253,6 +253,7 @@ static ssize_t conn_tx_completions(struct stuff *conn, bool err_ok,
         if (check_qd && zxq_comp[i].z.qd != conn->qd_last) {
             zhpeu_print_info("%s,%u:index 0x%x qd 0x%x\n", __func__, __LINE__,
                              zxq->cq_head - 1, zxq_comp[i].z.status);
+            conn->qd_last = zxq_comp[i].z.qd;
         }
     }
  done:
