@@ -153,6 +153,7 @@ static void timing_print(struct timing *t, const char *lbl, uint64_t divisor)
 {
     if (!t->cnt)
         return;
+
     zhpeu_print_info("%s:%s:ave/min/max/cnt %.3lf/%.3lf/%.3lf/%" PRIu64 "\n",
                      zhpeu_appname, lbl,
                      cycles_to_usec(t->tot, t->cnt * divisor),
@@ -355,15 +356,6 @@ static int do_server_pong(struct stuff *conn)
     conn_tx_stats_reset(conn);
     conn_rx_stats_reset(conn, 0);
 
-    /* One first message for easy debugging. */
-    ret = conn_rx_msg(conn, true, &msg);
-    if (ret < 0)
-        goto done;
-    if (!zhpeu_expected_saw("rx_msgs0", 1, ret)) {
-        ret = -EIO;
-        goto done;
-    }
-
     /*
      * First, the client will send conn->qlen  messages with 2 * poll_usec
      * delay beween them to test polling on our side and qd bits on its.
@@ -479,16 +471,6 @@ static int do_client_pong(struct stuff *conn)
 
     zhpeq_print_xq_info(conn->zxq);
     conn_tx_stats_reset(conn);
-
-    /* One first message for easy debugging. */
-    ret = conn_tx_msg(conn, 0, 0);
-    if (ret < 0)
-        goto done;
-    while (conn->tx_avail != conn->qlen) {
-        ret = conn_tx_completions(conn, false, true);
-        if (ret < 0)
-            goto done;
-    }
 
     /*
      * First, the sender will send conn->qlen messages with 2 * poll_cycles
