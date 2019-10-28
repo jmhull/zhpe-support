@@ -285,8 +285,10 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
                     break;
                 }
                 conn->epoll = false;
-            } else
+            } else {
+                assert(!sleep_ok);
                 break;
+            }
         }
         if (zhpeq_cmp_valid(rqe, qindex, conn->qlen)) {
             *msg_out = (void *)rqe->payload;
