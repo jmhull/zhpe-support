@@ -287,8 +287,8 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
                     ret = -EIO;
                     goto done;
                 }
+                conn->epoll = false;
             }
-            conn->epoll = false;
         }
         if (zhpeq_cmp_valid(rqe, qindex, conn->qlen)) {
             *msg_out = (void *)rqe->payload;
@@ -302,7 +302,7 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
                                      "zhpeq_rq_wait_check", "", rc);
                 goto done;
             }
-            if (rc > 0) {
+            if (rc > 0 && !conn->epoll) {
                 conn->epoll = true;
                 conn->epoll_cnt++;
             }
@@ -385,10 +385,11 @@ static int do_server_pong(struct stuff *conn)
             goto done;
         }
     }
-    zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max %lu/%d rx_oos/max %lu/%d\n",
+    zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max %lu/%d rx_oos/max %lu/%d"
+                     "epoll %lu\n",
                      zhpeu_appname, conn->zxq->wq_tail, conn->zrq->head,
                      conn->tx_oos, conn->tx_oos_max,
-                     conn->rx_oos, conn->rx_oos_max);
+                     conn->rx_oos, conn->rx_oos_max, conn->epoll_cnt);
 
     /* Queue is full; handshake over socket before ping-pong. */
     ret = _zhpeu_sock_send_blob(conn->sock_fd, NULL, 0);
