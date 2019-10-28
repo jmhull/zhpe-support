@@ -268,15 +268,14 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
     int                 ret = 0;
     struct zhpeq_rq     *zrq = conn->zrq;
     struct zhpe_rdm_entry *rqe = zhpeq_q_entry(zrq->rq, qindex, conn->qlen);
-    int                 rc;
 
     *msg_out = NULL;
     for (;;) {
         if (conn->epoll) {
-            rc = zhpeq_rq_epoll((sleep_ok ? -1 : 0), NULL, false,
-                                zhpeq_rq_epoll_ring_ready, &conn->epoll_ring);
-            if (likely(rc > 0)) {
-                if (!zhpeu_expected_saw("cnt", 1, rc)) {
+            ret = zhpeq_rq_epoll((sleep_ok ? -1 : 0), NULL, false,
+                                 zhpeq_rq_epoll_ring_ready, &conn->epoll_ring);
+            if (likely(ret > 0)) {
+                if (!zhpeu_expected_saw("cnt", 1, ret)) {
                     ret = -EIO;
                     goto done;
                 }
@@ -286,7 +285,7 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
                     goto done;
                 }
                 conn->epoll = false;
-            } else if (rc < 0)
+            } else if (ret < 0)
                 goto done;
             else
                 break;
@@ -296,16 +295,17 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
             ret = 1;
             goto done;
         }
-        rc = zhpeq_rq_wait_check(conn->zrq, conn->poll_cycles);
-        if (unlikely(rc)) {
-            if (rc < 0) {
+        ret = zhpeq_rq_wait_check(conn->zrq, conn->poll_cycles);
+        if (unlikely(ret)) {
+            if (ret > 0) {
+                if (!conn->epoll) {
+                    conn->epoll = true;
+                    conn->epoll_cnt++;
+                }
+            } else {
                 zhpeu_print_func_err(__func__, __LINE__,
-                                     "zhpeq_rq_wait_check", "", rc);
+                                     "zhpeq_rq_wait_check", "", ret);
                 goto done;
-            }
-            if (rc > 0 && !conn->epoll) {
-                conn->epoll = true;
-                conn->epoll_cnt++;
             }
         }
         if (!sleep_ok)
