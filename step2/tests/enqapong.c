@@ -324,12 +324,12 @@ static int conn_rx_msg(struct stuff *conn, bool sleep_ok,
 
     ret = conn_rx_msg_idx(conn, sleep_ok, zrq->head, msg_out);
     if (ret > 0) {
+        zrq->head++;
         tx_seq = be32toh((*msg_out)->seq);
         if (tx_seq != zrq->head) {
             conn->rx_oos++;
             conn->rx_oos_max = max(conn->rx_oos_max, abs(tx_seq - zrq->head));
         }
-        zrq->head++;
         now = get_cycles(NULL);
         if (conn->rx_last)
             timing_update(&conn->rx_lat, now - conn->rx_last);
@@ -591,7 +591,7 @@ static int do_client_pong(struct stuff *conn)
                 goto done;
             }
 
-            ret = conn_tx_msg(conn, 0, msg->flag);
+            ret = conn_tx_msg(conn, 0, tx_flag_out);
             if (ret < 0) {
                 if (ret == -EAGAIN) {
                     if (tx_flag_out == TX_LAST)
