@@ -503,7 +503,7 @@ static int do_client_pong(struct stuff *conn)
         goto done;
 
     for (;;) {
-        ret = conn_tx_completions(conn, false, true);
+        ret = conn_tx_completions(conn, true, true);
         if (!ret)
             continue;
         if (!zhpeu_expected_saw("tx_eio", -EIO, ret))

@@ -1246,7 +1246,8 @@ void zhpeq_print_xq_info(struct zhpeq_xq *zxq)
     printf("max_rx_queues : %u\n", attr->max_rx_queues);
     printf("max_tx_qlen   : %u\n", attr->max_tx_qlen);
     printf("max_rx_qlen   : %u\n", attr->max_rx_qlen);
-    printf("max_dma_len   : %Lu\n", (ullong)attr->max_dma_len);
+    printf("max_dma_len   : %" PRIu64 "\n", attr->max_dma_len);
+    printf("num_slices    : %u\n", attr->num_slices);
 
     printf("\n");
     zhpe_print_xq_info(xqi);
