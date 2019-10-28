@@ -91,6 +91,7 @@ struct stuff {
     size_t              qlen;
     uint32_t            dgcid;
     uint32_t            rspctxid;
+    uint32_t            tx_seq;
     int                 tx_oos_max;
     int                 rx_oos_max;
     size_t              tx_oos;
@@ -200,7 +201,7 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start, uint8_t flag)
     if (!pp_start)
         pp_start = msg->tx_start;
     msg->pp_start = pp_start;
-    msg->seq = htobe32(zxq->wq_tail);
+    msg->seq = htobe32(++conn->tx_seq);
     msg->flag = flag;
     zhpeq_xq_insert(zxq, ret, false);
     zhpeq_xq_commit(zxq);
