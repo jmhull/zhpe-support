@@ -928,16 +928,6 @@ int zhpeq_rq_epoll_ring_ready(void *varg, struct zhpeq_rq *zrq)
     return ret;
 }
 
-int zhpeq_rq_epoll_deinit(void)
-{
-    return zhpe_rq_epoll_deinit();
-}
-
-int zhpeq_rq_epoll_init(void)
-{
-    return zhpe_rq_epoll_init();
-}
-
 int zhpeq_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
                    int (*zrq_ready)(void *varg, struct zhpeq_rq *zrq),
                    void *varg)

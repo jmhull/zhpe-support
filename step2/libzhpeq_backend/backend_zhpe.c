@@ -467,13 +467,9 @@ static int zhpe_rq_epoll_deinit(void)
 {
     int                 ret = 0;
 
-    mutex_lock(&epoll_mutex);
-
     ret = zhpeu_update_error(ret, FD_CLOSE(epoll_fd));
     ret = zhpeu_update_error(ret, FD_CLOSE(epoll_pipe_fds[0]));
     ret = zhpeu_update_error(ret, FD_CLOSE(epoll_pipe_fds[1]));
-
-    mutex_unlock(&epoll_mutex);
 
     return ret;
 }
@@ -485,8 +481,6 @@ static int zhpe_rq_epoll_init(void)
         .events         = EPOLLIN,
         .data.u64       = ZHPE_MAX_IRQS,
     };
-
-    mutex_lock(&epoll_mutex);
 
     if (epoll_fd != -1)
         goto done;
@@ -513,7 +507,6 @@ static int zhpe_rq_epoll_init(void)
         goto done;
     }
  done:
-    mutex_unlock(&epoll_mutex);
     if (ret < 0)
         (void)zhpe_rq_epoll_deinit();
 
@@ -578,6 +571,9 @@ static int zhpe_rq_epoll_add(struct zhpeq_rqi *rqi)
     };
 
     mutex_lock(&epoll_mutex);
+
+    if (epoll_fd == -1 && (ret = zhpe_rq_epoll_init()) < 0)
+        goto done;
 
     if (!atm_cmpxchg(&epoll_rqi[qnum], &rqi_old, rqi)) {
         /* Should never happen. */

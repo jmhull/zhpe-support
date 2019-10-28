@@ -448,10 +448,6 @@ struct zhpeq_rq *zhpeq_rq_epoll_ring_read(struct zhpeq_rq_epoll_ring *zrqring)
     return zrqring->rq[zrqring->rq_rd++ & zrqring->rq_msk];
 }
 
-int zhpeq_rq_epoll_deinit(void);
-
-int zhpeq_rq_epoll_init(void);
-
 int zhpeq_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool entr_ok,
                    int (*zrq_active)(void *varg, struct zhpeq_rq *zrq),
                    void *varg);
