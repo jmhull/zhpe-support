@@ -621,6 +621,7 @@ static int do_client_pong(struct stuff *conn)
                      conn->tx_oos, conn->tx_oos_max,
                      conn->rx_oos, conn->rx_oos_max, conn->epoll_cnt);
  done:
+
     return ret;
 }
 
