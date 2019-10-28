@@ -684,6 +684,7 @@ static int zhpe_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
     /* Protect against zrqs being deleted. */
     mutex_lock(&epoll_mutex);
 
+    assert(timeout_ms == 0 || ret);
     nevents = ret;
     ret = 0;
     for (i = 0; i < nevents; i++) {
