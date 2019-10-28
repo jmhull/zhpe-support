@@ -805,10 +805,32 @@ int zhpeq_rq_alloc(struct zhpeq_dom *zdom, int rx_qlen, int slice_mask,
     return ret;
 }
 
+void __zhpeq_rq_head_update(struct zhpeq_rq *zrq)
+{
+    uint32_t            qmask = zrq->rqinfo.cmplq.ent - 1;
+    uint32_t            qhead = zrq->head;
+
+    zrq->head_commit = qhead;
+    qcmwrite64(qhead & qmask, zrq->qcm, ZHPE_RDM_QCM_RCV_QUEUE_HEAD_OFFSET);
+}
+
+static inline int zrq_check_idle(struct zhpeq_rq *zrq)
+{
+    uint32_t            qmask = zrq->rqinfo.cmplq.ent - 1;
+    uint32_t            qhead = (zrq->head_commit & qmask);
+    uint32_t            qtail;
+
+    /* Return > 0 if queue is idle. */
+    qtail = (qcmread64(zrq->qcm,
+                       ZHPE_RDM_QCM_RCV_QUEUE_TAIL_TOGGLE_OFFSET) & qmask);
+
+    return (qhead == qtail);
+}
+
 int zhpeq_rq_wait_check(struct zhpeq_rq *zrq, uint64_t poll_cycles)
 {
     int                 ret = -EINVAL;
-    struct zhpeq_rqi    *rqi = container_of(zrq, struct zhpeq_rqi, zrq);
+    uint64_t            now;
 
     /*
      * To be called after zhpeq_rq_valid() fails; returns > 0
@@ -822,10 +844,17 @@ int zhpeq_rq_wait_check(struct zhpeq_rq *zrq, uint64_t poll_cycles)
      */
     if (!zrq)
         goto done;
-    /* Assume the container_of() confuses the compiler about aliases. */
-    zrq = &rqi->zrq;
 
-    ret = zhpe_rq_wait_check(rqi, poll_cycles);
+    now = get_cycles(NULL);
+    if (zrq->rx_poll_start_head != zrq->head) {
+        zrq->rx_poll_start_head = zrq->head;
+        zrq->rx_poll_start = now;
+        __zhpeq_rq_head_update(zrq);
+        goto done;
+    }
+    if (now - zrq->rx_poll_start < poll_cycles)
+        goto done;
+    ret = zrq_check_idle(zrq);
  done:
 
     return ret;

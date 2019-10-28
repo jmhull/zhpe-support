@@ -658,45 +658,6 @@ static int zhpe_rq_alloc(struct zhpeq_rqi *rqi, int rqlen, int slice_mask)
     return ret;
 }
 
-static inline int zhpe_rq_head_update(struct zhpeq_rqi *rqi, bool check_idle)
-{
-    struct zhpeq_rq     *zrq = &rqi->zrq;
-    uint32_t            qmask = zrq->rqinfo.cmplq.ent - 1;
-    uint32_t            qhead = (zrq->head & qmask);
-    uint32_t            qtail;
-
-    /* Returns > 1 if queue is idle. */
-    zrq->head_commit = zrq->head;
-    qcmwrite64(qhead, zrq->qcm, ZHPE_RDM_QCM_RCV_QUEUE_HEAD_OFFSET);
-    if (!check_idle)
-        return 0;
-    qtail = (qcmread64(zrq->qcm,
-                       ZHPE_RDM_QCM_RCV_QUEUE_TAIL_TOGGLE_OFFSET) & qmask);
-
-    return (qhead == qtail ? 1 : 0);
-}
-
-static int zhpe_rq_wait_check(struct zhpeq_rqi *rqi, uint64_t poll_cycles)
-{
-    int                 ret = 0;
-    struct zhpeq_rq     *zrq = &rqi->zrq;
-    uint64_t            now;
-
-    now = get_cycles(NULL);
-    if (zrq->rx_poll_start_head != zrq->head) {
-        zrq->rx_poll_start_head = zrq->head;
-        zrq->rx_poll_start = now;
-        (void)zhpe_rq_head_update(rqi, false);
-        goto done;
-    }
-    if (now - zrq->rx_poll_start < poll_cycles)
-        goto done;
-    ret = zhpe_rq_head_update(rqi, true);
- done:
-
-    return ret;
-}
-
 static int zhpe_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
                          int (*zrq_ready)(void *varg, struct zhpeq_rq *zrq),
                          void *varg)

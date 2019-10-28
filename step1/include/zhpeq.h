@@ -414,6 +414,15 @@ static inline void *zhpeq_q_entry(void *entries, uint32_t qindex,
     return VPTR(entries, ZHPE_HW_ENTRY_LEN * (qindex & qmask));
 }
 
+void __zhpeq_rq_head_update(struct zhpeq_rq *zrq);
+
+static inline void zhpeq_rq_head_update(struct zhpeq_rq *zrq, bool force)
+{
+    if (force ||
+        unlikely(zrq->head - zrq->head_commit > zrq->rqinfo.cmplq.ent / 2))
+        __zhpeq_rq_head_update(zrq);
+}
+
 static inline struct zhpe_rdm_entry *zhpeq_rq_valid(struct zhpeq_rq *zrq,
                                                     bool increment)
 {
@@ -421,6 +430,7 @@ static inline struct zhpe_rdm_entry *zhpeq_rq_valid(struct zhpeq_rq *zrq,
     uint32_t            qindex = zrq->head;
     struct zhpe_rdm_entry *rqe = zhpeq_q_entry(zrq->rq, qindex, qmask);
 
+    zhpeq_rq_head_update(zrq, false);
     if (zhpeq_cmp_valid(rqe, qindex, qmask)) {
         if (increment)
             zrq->head = qindex++;
