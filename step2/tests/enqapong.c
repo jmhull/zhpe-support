@@ -296,7 +296,7 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
             goto done;
         }
         rc = zhpeq_rq_wait_check(conn->zrq, conn->poll_cycles);
-        if (unlikely(rc)) {
+        if (likely(rc)) {
             if (rc < 0) {
                 zhpeu_print_func_err(__func__, __LINE__,
                                      "zhpeq_rq_wait_check", "", rc);
