@@ -302,11 +302,11 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
                 if (ret > 0) {
                     conn->epoll = true;
                     conn->epoll_cnt++;
+                } else {
+                    zhpeu_print_func_err(__func__, __LINE__,
+                                         "zhpeq_rq_wait_check", "", ret);
+                    break;
                 }
-            } else {
-                zhpeu_print_func_err(__func__, __LINE__,
-                                     "zhpeq_rq_wait_check", "", ret);
-                break;
             }
         }
         if (!sleep_ok) {
