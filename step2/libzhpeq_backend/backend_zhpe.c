@@ -658,6 +658,21 @@ static int zhpe_rq_alloc(struct zhpeq_rqi *rqi, int rqlen, int slice_mask)
     return ret;
 }
 
+static bool zhpe_rq_epoll_enable(struct zhpeq_rqi *rqi)
+{
+    uint32_t            qnum = rqi_qnum(rqi);
+    struct zhpeq_rqi    *rqi_old = NULL;
+
+    return atm_cmpxchg(&epoll_rqi[qnum], &rqi_old, rqi);
+}
+
+static bool zhpe_rq_epoll_disable(struct zhpeq_rqi *rqi)
+{
+    uint32_t            qnum = rqi_qnum(rqi);
+
+    return atm_cmpxchg(&epoll_rqi[qnum], &rqi, NULL);
+}
+
 static int do_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
                        int (*zrq_ready)(void *varg, struct zhpeq_rq *zrq),
                        void *varg)
@@ -667,7 +682,6 @@ static int do_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
     uint32_t            evts;
     uint32_t            i;
     struct zhpeq_rqi    *rqi;
-    struct zhpeq_rqi    *rqi_lock;
     int                 nevents;
     struct epoll_event  events[ZHPE_MAX_IRQS];
     char                pipe_buf[32];
@@ -708,19 +722,12 @@ static int do_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
             rqi = atm_load_rlx(&epoll_rqi[i]);
             if (!rqi)
                 continue;
-            /* We'll steal bit 0 as a flag; non-zero => skip. (evil) */
-            if ((uintptr_t)rqi & 1)
-                continue;
-            /* Is the current head valid or the tail ahead? */
-            if (!zhpeq_rq_valid(&rqi->zrq, false) && !zrq_check_idle(&rqi->zrq))
+            /* Is the current head valid? */
+            if (!zhpeq_rq_valid(&rqi->zrq, false))
                 /* No. */
                 continue;
-            /*
-             * A queue has a valid entry. Use cmpxchg to lock the queue
-             * from further polling and handle races.
-             */
-            rqi_lock = TO_PTR((uintptr_t)rqi | 1);
-            if (!atm_cmpxchg(&epoll_rqi[i], &rqi, rqi_lock))
+            /* A queue has a valid entry. Disable poll checks. */
+            if (!atm_cmpxchg(&epoll_rqi[i], &rqi, NULL))
                 continue;
             /* Lock succeeded, call zrq_ready(). */
             ret = zrq_ready(varg, &rqi->zrq);
@@ -747,20 +754,6 @@ static int zhpe_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
         if (ret || timeout_ms != -1)
             break;
     }
-
-    return ret;
-}
-
-static int zhpe_rq_epoll_enable(struct zhpeq_rqi *rqi)
-{
-    int                 ret = 0;
-    uint32_t            qnum = rqi_qnum(rqi);
-    struct zhpeq_rqi    *rqi_old = TO_PTR((uintptr_t)rqi | 1);
-
-    if (atm_cmpxchg(&epoll_rqi[qnum], &rqi_old, rqi))
-        goto done;
-    assert(rqi_old == rqi);
- done:
 
     return ret;
 }
