@@ -248,7 +248,7 @@ static ssize_t conn_tx_completions(struct stuff *conn, bool qfull_ok,
                 zhpeu_print_err("%s,%u:index 0x%x status 0x%x\n",
                                 __func__, __LINE__,
                                 zxq->cq_head - 1, zxq_comp[i].z.status);
-            ret = -EREMOTEIO;
+            ret = -EIO;
             (void)zhpeq_xq_restart(zxq);
         }
         /* if (check_qd && zxq_comp[i].z.qd != conn->qd_last) */
