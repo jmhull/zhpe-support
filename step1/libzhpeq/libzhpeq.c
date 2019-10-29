@@ -325,12 +325,55 @@ int zhpeq_domain_alloc(struct zhpeq_dom **zdom_out)
     return ret;
 }
 
+static union xdm_active zxq_idle_wait(struct zhpeq_xq *zxq)
+{
+    union xdm_active    active;
+
+    for (;;) {
+        active.u64 = qcmread64(zxq->qcm,
+                               ZHPE_XDM_QCM_ACTIVE_STATUS_ERROR_OFFSET);
+        if (!active.bits.active)
+            break;
+        yield();
+    }
+
+    return active;
+}
+
+static union xdm_active zxq_stop(struct zhpeq_xq *zxq)
+{
+    qcmwrite64(1, zxq->qcm, ZHPE_XDM_QCM_STOP_OFFSET);
+
+    return zxq_idle_wait(zxq);
+}
+
+int zhpeq_xq_restart(struct zhpeq_xq *zxq)
+{
+    int                 ret = -EINVAL;
+    union xdm_active    active;
+
+    if (!zxq)
+        goto done;
+
+    ret = 0;
+    active = zxq_stop(zxq);
+    if (active.bits.error) {
+        ret = -EIO;
+        if (active.bits.status != ZHPE_XDM_QCM_STATUS_CMD_ERROR)
+            zhpeu_print_err("%s,%u:status %u\n",
+                            __func__, __LINE__, active.bits.status);
+    }
+    qcmwrite64(0, zxq->qcm, ZHPE_XDM_QCM_STOP_OFFSET);
+ done:
+
+    return ret;
+}
+
 int zhpeq_xq_free(struct zhpeq_xq *zxq)
 {
     int                 ret = -EINVAL;
     struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, zxq);
     int                 rc;
-    union xdm_active    active;
 
     if (!zxq)
         goto done;
@@ -338,16 +381,9 @@ int zhpeq_xq_free(struct zhpeq_xq *zxq)
     zxq = &xqi->zxq;
 
     /* Stop the queue. */
-    if (zxq->qcm) {
-        qcmwrite64(1, zxq->qcm, ZHPE_XDM_QCM_STOP_OFFSET);
-        for (;;) {
-            active.u64 = qcmread64(zxq->qcm,
-                                   ZHPE_XDM_QCM_ACTIVE_STATUS_ERROR_OFFSET);
-            if (!active.bits.active)
-                break;
-            yield();
-        }
-    }
+    if (zxq->qcm)
+        zxq_stop(zxq);
+
     rc = zhpe_xq_free_pre(xqi);
 
     ret = 0;

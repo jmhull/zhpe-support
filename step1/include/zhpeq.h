@@ -400,6 +400,8 @@ static inline bool zhpeq_cmp_valid(volatile void *qent, uint32_t qindex,
     return ((valid ^ (qindex >> shift)) & ZHPE_CMP_ENT_VALID_MASK);
 }
 
+int zhpeq_xq_restart(struct zhpeq_xq *zxq);
+
 ssize_t zhpeq_xq_cq_read(struct zhpeq_xq *zxq,
                          struct zhpeq_xq_cq_entry *entries, size_t n_entries);
 
