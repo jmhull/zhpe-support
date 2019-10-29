@@ -296,10 +296,10 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
             ret = 1;
             break;
         }
-        ret = zhpeq_rq_wait_check(conn->zrq, conn->poll_cycles);
-        if (unlikely(ret)) {
-            if (ret > 0) {
-                if (!conn->epoll) {
+        if (!conn->epoll) {
+            ret = zhpeq_rq_wait_check(conn->zrq, conn->poll_cycles);
+            if (unlikely(ret)) {
+                if (ret > 0) {
                     conn->epoll = true;
                     conn->epoll_cnt++;
                 }
