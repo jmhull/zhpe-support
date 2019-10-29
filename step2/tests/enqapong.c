@@ -328,6 +328,7 @@ static int conn_rx_msg(struct stuff *conn, bool sleep_ok,
     ret = conn_rx_msg_idx(conn, sleep_ok, zrq->head, msg_out);
     if (ret > 0) {
         zrq->head++;
+        zhpeq_rq_head_update(zrq, false);
         tx_seq = be32toh((*msg_out)->seq);
         if (tx_seq != zrq->head) {
             conn->rx_oos++;
