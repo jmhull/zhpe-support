@@ -810,6 +810,7 @@ void __zhpeq_rq_head_update(struct zhpeq_rq *zrq)
     uint32_t            qmask = zrq->rqinfo.cmplq.ent - 1;
     uint32_t            qhead = zrq->head;
 
+    abort();
     zrq->head_commit = qhead;
     qcmwrite64(qhead & qmask, zrq->qcm, ZHPE_RDM_QCM_RCV_QUEUE_HEAD_OFFSET);
 }
@@ -835,9 +836,7 @@ int zhpeq_rq_wait_check(struct zhpeq_rq *zrq, uint64_t poll_cycles)
     /*
      * To be called after zhpeq_rq_valid() fails; returns > 0
      * if polling timeout is exhausted and queue is idle: time to wait
-     * for interrupt. Given that interrupts are shared, waiting for interrupt
-     * is really quite tricky. zhpeq_rq_wait(), below, will be correct only
-     * in the case there is a sin
+     * for interrupt.
      *
      * Timeout for polling starts/restarts on the first call to this function
      * after a previously successful read.
