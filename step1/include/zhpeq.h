@@ -471,8 +471,6 @@ int zhpeq_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool entr_ok,
                    int (*zrq_active)(void *varg, struct zhpeq_rq *zrq),
                    void *varg);
 
-int zhpeq_rq_epoll_enable(struct zhpeq_rq *zrq);
-
 int zhpeq_rq_epoll_signal(void);
 
 int zhpeq_mr_reg(struct zhpeq_dom *zdom, const void *buf, size_t len,
