@@ -268,16 +268,12 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
     int                 ret = 0;
     struct zhpeq_rq     *zrq = conn->zrq;
     struct zhpe_rdm_entry *rqe = zhpeq_q_entry(zrq->rq, qindex, conn->qlen);
-    uint32_t            save_head;
 
     *msg_out = NULL;
     for (;;) {
-        if (conn->epoll) {
-            save_head = zrq->head;
-            zrq->head = qindex;
+        if (conn->epoll && qindex == zrq->head) {
             ret = zhpeq_rq_epoll((sleep_ok ? -1 : 0), NULL, false,
                                  zhpeq_rq_epoll_ring_ready, &conn->epoll_ring);
-            zrq->head = save_head;
             if (likely(ret > 0)) {
                 if (!zhpeu_expected_saw("cnt", 1, ret)) {
                     ret = -EIO;

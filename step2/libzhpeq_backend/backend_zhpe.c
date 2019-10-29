@@ -711,8 +711,9 @@ static int do_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
             /* We'll steal bit 0 as a flag; non-zero => skip. (evil) */
             if ((uintptr_t)rqi & 1)
                 continue;
-            /* Is the current head valid? */
-            if (!zhpeq_rq_valid(&rqi->zrq, false))
+            /* Is the current head valid or the tail ahead? */
+            if (!zhpeq_rq_valid(&rqi->zrq, false) && !zrq_check_idle(&rqi->zrq))
+                /* No. */
                 continue;
             /*
              * A queue has a valid entry. Use cmpxchg to lock the queue

@@ -814,19 +814,6 @@ void __zhpeq_rq_head_update(struct zhpeq_rq *zrq)
     qcmwrite64(qhead & qmask, zrq->qcm, ZHPE_RDM_QCM_RCV_QUEUE_HEAD_OFFSET);
 }
 
-static inline int zrq_check_idle(struct zhpeq_rq *zrq)
-{
-    uint32_t            qmask = zrq->rqinfo.cmplq.ent - 1;
-    uint32_t            qhead = (zrq->head_commit & qmask);
-    uint32_t            qtail;
-
-    /* Return > 0 if queue is idle. */
-    qtail = (qcmread64(zrq->qcm,
-                       ZHPE_RDM_QCM_RCV_QUEUE_TAIL_TOGGLE_OFFSET) & qmask);
-
-    return (qhead == qtail);
-}
-
 int zhpeq_rq_wait_check(struct zhpeq_rq *zrq, uint64_t poll_cycles)
 {
     int                 ret = -EINVAL;

@@ -217,6 +217,19 @@ union rdm_active {
     uint64_t            u64;
 };
 
+static inline int zrq_check_idle(struct zhpeq_rq *zrq)
+{
+    uint32_t            qmask = zrq->rqinfo.cmplq.ent - 1;
+    uint32_t            qhead = (zrq->head_commit & qmask);
+    uint32_t            qtail;
+
+    /* Return > 0 if queue is idle. */
+    qtail = (qcmread64(zrq->qcm,
+                       ZHPE_RDM_QCM_RCV_QUEUE_TAIL_TOGGLE_OFFSET) & qmask);
+
+    return (qhead == qtail);
+}
+
 _EXTERN_C_END
 
 #endif /* _LIBZHPEQ_INTERNAL_H */
