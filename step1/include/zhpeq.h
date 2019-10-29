@@ -430,10 +430,11 @@ static inline struct zhpe_rdm_entry *zhpeq_rq_valid(struct zhpeq_rq *zrq,
     uint32_t            qindex = zrq->head;
     struct zhpe_rdm_entry *rqe = zhpeq_q_entry(zrq->rq, qindex, qmask);
 
-    zhpeq_rq_head_update(zrq, false);
     if (zhpeq_cmp_valid(rqe, qindex, qmask)) {
-        if (increment)
+        if (increment) {
             zrq->head = qindex++;
+            zhpeq_rq_head_update(zrq, false);
+        }
         return rqe;
     }
 
@@ -512,6 +513,9 @@ void zhpeq_print_xq_qcm(const char *func, uint line,
 void zhpeq_print_xq_wq(struct zhpeq_xq *zxq, int cnt);
 
 void zhpeq_print_xq_cq(struct zhpeq_xq *zxq, int cnt);
+
+void zhpeq_print_rq_qcm(const char *func, uint line,
+                        const struct zhpeq_rq *zrq);
 
 _EXTERN_C_END
 

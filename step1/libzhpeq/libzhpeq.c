@@ -810,7 +810,6 @@ void __zhpeq_rq_head_update(struct zhpeq_rq *zrq)
     uint32_t            qmask = zrq->rqinfo.cmplq.ent - 1;
     uint32_t            qhead = zrq->head;
 
-    abort();
     zrq->head_commit = qhead;
     qcmwrite64(qhead & qmask, zrq->qcm, ZHPE_RDM_QCM_RCV_QUEUE_HEAD_OFFSET);
 }
@@ -1568,4 +1567,18 @@ void zhpeq_print_xq_cq(struct zhpeq_xq *zxq, int cnt)
                 i, cqe->entry.valid, cqe->entry.index, cqe->entry.status,
                 d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
     }
+}
+
+void zhpeq_print_rq_qcm(const char *func, uint line, const struct zhpeq_rq *zrq)
+{
+    uint                i;
+
+    if (!zrq)
+        return;
+
+    printf("%s,%u:%s %p\n", func, line, __func__, zrq->qcm);
+    for (i = 0x00; i < 0x20; i += 0x08)
+        print_qcm1(func, line, zrq->qcm, i);
+    for (i = 0x40; i < 0x100; i += 0x40)
+        print_qcm1(func, line, zrq->qcm, i);
 }
