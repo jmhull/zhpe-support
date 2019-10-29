@@ -658,9 +658,9 @@ static int zhpe_rq_alloc(struct zhpeq_rqi *rqi, int rqlen, int slice_mask)
     return ret;
 }
 
-static int zhpe_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
-                         int (*zrq_ready)(void *varg, struct zhpeq_rq *zrq),
-                         void *varg)
+static int do_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
+                       int (*zrq_ready)(void *varg, struct zhpeq_rq *zrq),
+                       void *varg)
 {
     int                 ret;
     uint32_t            irq;
@@ -684,7 +684,6 @@ static int zhpe_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
     /* Protect against zrqs being deleted. */
     mutex_lock(&epoll_mutex);
 
-    assert(timeout_ms == 0 || ret);
     nevents = ret;
     ret = 0;
     for (i = 0; i < nevents; i++) {
@@ -732,6 +731,21 @@ static int zhpe_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
 
     mutex_unlock(&epoll_mutex);
  done:
+
+    return ret;
+}
+
+static int zhpe_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
+                         int (*zrq_ready)(void *varg, struct zhpeq_rq *zrq),
+                         void *varg)
+{
+    int                 ret;
+
+    for (;;) {
+        ret = do_rq_epoll(timeout_ms, sigmask, eintr_ok, zrq_ready, varg);
+        if (ret || timeout_ms != -1)
+            break;
+    }
 
     return ret;
 }
