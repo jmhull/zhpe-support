@@ -453,7 +453,7 @@ static int do_server_pong(struct stuff *conn)
             goto done;
         if (!ret)
             continue;
-        assert(be64toh(msg.seq) == i);
+        assert(be32toh(msg.seq) == i);
     }
 
     conn_stats_print(conn);
@@ -471,7 +471,7 @@ static int do_server_pong(struct stuff *conn)
             goto done;
         if (!ret)
             continue;
-        assert(be64toh(msg.seq) == i);
+        assert(be32toh(msg.seq) == i);
     }
 
     conn_stats_print(conn);
