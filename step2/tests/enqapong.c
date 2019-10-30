@@ -451,8 +451,9 @@ static int do_server_pong(struct stuff *conn)
         ret = conn_rx_msg(conn, &msg, false);
         if (ret < 0)
             goto done;
-        assert(ret == 1);
-        zhpeq_rq_entry_done(conn->zrq, 1, true);
+        if (!ret)
+            continue;
+        assert(be64toh(msg.seq) == i);
     }
 
     conn_stats_print(conn);
@@ -468,8 +469,9 @@ static int do_server_pong(struct stuff *conn)
         ret = conn_rx_msg(conn, &msg, false);
         if (ret < 0)
             goto done;
-        assert(ret == 1);
-        zhpeq_rq_entry_done(conn->zrq, 1, true);
+        if (!ret)
+            continue;
+        assert(be64toh(msg.seq) == i);
     }
 
     conn_stats_print(conn);
