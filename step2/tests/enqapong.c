@@ -88,6 +88,8 @@ struct stuff {
     size_t              ring_ops;
     size_t              ring_warmup;
     uint32_t            tx_seq;
+    uint32_t            cq_seq;
+    uint32_t            rx_seq;
     int                 tx_oos_max;
     int                 rx_oos_max;
     size_t              tx_oos;
@@ -137,6 +139,8 @@ static void conn_tx_stats_reset(struct stuff *conn)
 {
     timing_reset(&conn->tx_lat);
     timing_reset(&conn->tx_cmp);
+    conn->tx_seq = 0;
+    conn->cq_seq = 0;
     conn->tx_oos = 0;
     conn->tx_oos_max = 0;
 }
@@ -144,6 +148,7 @@ static void conn_tx_stats_reset(struct stuff *conn)
 static void conn_rx_stats_reset(struct stuff *conn, uint64_t rx_last)
 {
     timing_reset(&conn->rx_lat);
+    conn->rx_seq = 0;
     conn->rx_oos = 0;
     conn->rx_oos_max = 0;
     conn->rx_last = rx_last;
@@ -201,7 +206,7 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start, uint8_t flag)
     if (!pp_start)
         pp_start = msg->tx_start;
     msg->pp_start = pp_start;
-    msg->seq = htobe32(++conn->tx_seq);
+    msg->seq = htobe32(conn->tx_seq++);
     msg->flag = flag;
     zhpeq_xq_insert(zxq, ret, false);
     zhpeq_xq_commit(zxq);
@@ -236,11 +241,12 @@ static ssize_t conn_tx_completions(struct stuff *conn, bool qfull_ok,
         msg = zxq_comp[i].z.context;
         timing_update(&conn->tx_cmp, get_cycles(NULL) - be64toh(msg->tx_start));
         tx_seq = be32toh(msg->seq);
-        if (tx_seq != zxq->cq_head) {
+        if (tx_seq != conn->cq_seq) {
             conn->tx_oos++;
             conn->tx_oos_max = max(conn->tx_oos_max,
-                                   abs(tx_seq - zxq->cq_head));
+                                   abs(tx_seq - conn->cq_seq));
         }
+        conn->cq_seq++;
         conn->tx_avail++;
         if (zxq_comp[i].z.status != ZHPEQ_XQ_CQ_STATUS_SUCCESS) {
             if (!qfull_ok ||
@@ -249,7 +255,6 @@ static ssize_t conn_tx_completions(struct stuff *conn, bool qfull_ok,
                                 __func__, __LINE__,
                                 zxq->cq_head - 1, zxq_comp[i].z.status);
             ret = -EIO;
-            (void)zhpeq_xq_restart(zxq);
         }
         /* if (check_qd && zxq_comp[i].z.qd != conn->qd_last) */
         if (zxq_comp[i].z.qd) {
@@ -331,10 +336,12 @@ static int conn_rx_msg(struct stuff *conn, bool sleep_ok,
         zrq->head++;
         zhpeq_rq_head_update(zrq, false);
         tx_seq = be32toh((*msg_out)->seq);
-        if (tx_seq != zrq->head) {
+        if (tx_seq != conn->rx_seq) {
             conn->rx_oos++;
-            conn->rx_oos_max = max(conn->rx_oos_max, abs(tx_seq - zrq->head));
+            conn->rx_oos_max = max(conn->rx_oos_max,
+                                   abs(tx_seq - conn->rx_seq));
         }
+        conn->rx_seq++;
         now = get_cycles(NULL);
         if (conn->rx_last)
             timing_update(&conn->rx_lat, now - conn->rx_last);
