@@ -933,22 +933,12 @@ static int do_client(const struct args *args)
         goto done;
     conn.sock_fd = ret;
 
-    /* Build the queues before sending parameters to server. */
-    ret = do_q_setup(&conn);
-    if (ret < 0)
-        goto done;
-
     /* Send arguments to the server. */
     cli_msg.poll_usec = htobe64(args->poll_usec);
     cli_msg.qlen = htobe64(args->qlen);
     cli_msg.once_mode = args->once_mode;
 
     ret = _zhpeu_sock_send_blob(conn.sock_fd, &cli_msg, sizeof(cli_msg));
-    if (ret < 0)
-        goto done;
-
-    /* Dummy for ordering. */
-    ret = _zhpeu_sock_recv_fixed_blob(conn.sock_fd, NULL, 0);
     if (ret < 0)
         goto done;
 
@@ -966,6 +956,11 @@ static int do_client(const struct args *args)
             conn.ring_warmup = DEFAULT_WARMUP;
         conn.ring_ops += conn.ring_warmup;
     }
+
+    /* Build the queues before sending parameters to server. */
+    ret = do_q_setup(&conn);
+    if (ret < 0)
+        goto done;
 
     /* Run test. */
     ret = do_client_pong(&conn);
