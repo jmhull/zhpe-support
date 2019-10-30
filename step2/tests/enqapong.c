@@ -297,15 +297,9 @@ static int conn_rx_msg(struct stuff *conn, bool sleep_ok,
             ret = zhpeq_rq_epoll((sleep_ok ? -1 : 0), NULL, false,
                                  zhpeq_rq_epoll_ring_ready, &conn->epoll_ring);
             if (likely(ret > 0)) {
-                if (!zhpeu_expected_saw("cnt", 1, ret)) {
-                    ret = -EIO;
-                    break;
-                }
+                assert(ret == 1);
                 zrq = zhpeq_rq_epoll_ring_read(&conn->epoll_ring);
-                if (!zhpeu_expected_saw("zrq", conn->zrq, zrq)) {
-                    ret = -EIO;
-                    break;
-                }
+                assert(zrq == conn->zrq);
                 conn->epoll = false;
             } else {
                 assert(!sleep_ok);
