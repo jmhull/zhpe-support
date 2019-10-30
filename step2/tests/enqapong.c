@@ -392,6 +392,7 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
             if (likely(!oos)) {
                 conn->rx_seq++;
                 *msg_out = *msg;
+                assert(!memcmp(msg_out, msg, sizeof(*msg)));
                 zhpeq_rq_entry_done(zrq, 1, true);
                 ret = 1;
             } else
