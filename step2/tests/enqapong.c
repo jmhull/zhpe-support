@@ -44,9 +44,10 @@
 #else
 #define TIMEOUT         (10000)
 #endif
-#define DEFAULT_POLL    (100)
-#define DEFAULT_QLEN    (1023)
-#define DEFAULT_WARMUP  (100)
+#define DEFAULT_POLL    (100U)
+#define DEFAULT_QLEN    (1023U)
+#define DEFAULT_WARMUP  (100U)
+#define DEFAULT_EPOLL   (10000U)
 
 struct cli_wire_msg {
     uint64_t            qlen;
@@ -168,6 +169,19 @@ static void timing_print(struct timing *t, const char *lbl, uint64_t divisor)
                      t->cnt);
 }
 
+static void conn_stats_print(struct stuff *conn)
+{
+    timing_print(&conn->pp_lat, "pp_lat", 2);
+    timing_print(&conn->tx_lat, "tx_lat", 1);
+    timing_print(&conn->tx_cmp, "tx_cmp", 1);
+    timing_print(&conn->rx_lat, "rx_lat", 1);
+    zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max %lu/%d rx_oos/max %lu/%d"
+                     " epoll %lu\n",
+                     zhpeu_appname, conn->tx_seq, conn->rx_seq,
+                     conn->tx_oos, conn->tx_oos_max,
+                     conn->rx_oos, conn->rx_oos_max, conn->epoll_cnt);
+}
+
 static void stuff_free(struct stuff *stuff)
 {
     if (!stuff)
@@ -268,16 +282,18 @@ static ssize_t conn_tx_completions(struct stuff *conn, bool qfull_ok,
     return ret;
 }
 
-static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
-                           uint32_t qindex, struct enqa_msg **msg_out)
+static int conn_rx_msg(struct stuff *conn, bool sleep_ok,
+                       struct enqa_msg **msg_out)
 {
     int                 ret = 0;
     struct zhpeq_rq     *zrq = conn->zrq;
-    struct zhpe_rdm_entry *rqe = zhpeq_q_entry(zrq->rq, qindex, conn->qlen);
+    struct zhpe_rdm_entry *rqe;
+    uint32_t            tx_seq;
+    uint64_t            now;
 
     *msg_out = NULL;
     for (;;) {
-        if (conn->epoll && qindex == zrq->head) {
+        if (conn->epoll) {
             ret = zhpeq_rq_epoll((sleep_ok ? -1 : 0), NULL, false,
                                  zhpeq_rq_epoll_ring_ready, &conn->epoll_ring);
             if (likely(ret > 0)) {
@@ -296,8 +312,19 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
                 break;
             }
         }
-        if (zhpeq_cmp_valid(rqe, qindex, conn->qlen)) {
+        if ((rqe = zhpeq_rq_valid(zrq, true))) {
             *msg_out = (void *)rqe->payload;
+            tx_seq = be32toh((*msg_out)->seq);
+            if (tx_seq != conn->rx_seq) {
+                conn->rx_oos++;
+                conn->rx_oos_max = max(conn->rx_oos_max,
+                                       abs(tx_seq - conn->rx_seq));
+            }
+            conn->rx_seq++;
+            now = get_cycles(NULL);
+            if (conn->rx_last)
+                timing_update(&conn->rx_lat, now - conn->rx_last);
+            conn->rx_last = now;
             ret = 1;
             break;
         }
@@ -323,34 +350,6 @@ static int conn_rx_msg_idx(struct stuff *conn, bool sleep_ok,
     return ret;
 }
 
-static int conn_rx_msg(struct stuff *conn, bool sleep_ok,
-                       struct enqa_msg **msg_out)
-{
-    int                 ret;
-    struct zhpeq_rq     *zrq = conn->zrq;
-    uint32_t            tx_seq;
-    uint64_t            now;
-
-    ret = conn_rx_msg_idx(conn, sleep_ok, zrq->head, msg_out);
-    if (ret > 0) {
-        zrq->head++;
-        zhpeq_rq_head_update(zrq, false);
-        tx_seq = be32toh((*msg_out)->seq);
-        if (tx_seq != conn->rx_seq) {
-            conn->rx_oos++;
-            conn->rx_oos_max = max(conn->rx_oos_max,
-                                   abs(tx_seq - conn->rx_seq));
-        }
-        conn->rx_seq++;
-        now = get_cycles(NULL);
-        if (conn->rx_last)
-            timing_update(&conn->rx_lat, now - conn->rx_last);
-        conn->rx_last = now;
-    }
-
-    return ret;
-}
-
 static int do_server_pong(struct stuff *conn)
 {
     int                 ret = 0;
@@ -364,21 +363,14 @@ static int do_server_pong(struct stuff *conn)
     uint32_t            tx_stamp_idx;
 
     zhpeq_print_xq_info(conn->zxq);
+
     conn_tx_stats_reset(conn);
-    conn_rx_stats_reset(conn, 0);
 
     /*
-     * First, the client will send conn->qlen  messages with 2 * poll_usec
-     * delay beween them to test polling on our side and qd bits on its.
+     * First, the client will send conn->qlen  + 1 messages to overrun the
+     * receive queue. We will not read the receive queue until the server
+     * handshakes over the socket.
      */
-    ret = conn_rx_msg_idx(conn, true, conn->zrq->head + conn->qlen - 1, &msg);
-    if (ret < 0)
-        goto done;
-    if (!zhpeu_expected_saw("rx_msgs1", 1, ret)) {
-        ret = -EIO;
-        goto done;
-    }
-    /* Received queue is full; handshake over socket for overrun test. */
     ret = _zhpeu_sock_send_blob(conn->sock_fd, NULL, 0);
     if (ret < 0)
         goto done;
@@ -387,32 +379,44 @@ static int do_server_pong(struct stuff *conn)
         goto done;
 
     /* Receive all the pending entries. */
+    conn_rx_stats_reset(conn, 0);
     for (i = 0; i < conn->qlen; i++) {
-        ret = conn_rx_msg(conn, false, &msg);
+        ret = conn_rx_msg(conn, true, &msg);
         if (ret < 0)
             goto done;
-        if (!zhpeu_expected_saw("rx_msgs2", 1, ret)) {
-            ret = -EIO;
-            goto done;
-        }
+        assert(ret == 1);
     }
-    zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max %lu/%d rx_oos/max %lu/%d"
-                     " epoll %lu\n",
-                     zhpeu_appname, conn->tx_seq, conn->rx_seq,
-                     conn->tx_oos, conn->tx_oos_max,
-                     conn->rx_oos, conn->rx_oos_max, conn->epoll_cnt);
 
-    /* Queue is full; handshake over socket before ping-pong. */
+    conn_stats_print(conn);
+
+    /* Second, an epoll test. Server rate limits to force epoll. */
     ret = _zhpeu_sock_send_blob(conn->sock_fd, NULL, 0);
     if (ret < 0)
         goto done;
+
+    /* Receive all pending entries. */
+    conn_rx_stats_reset(conn, 0);
+    for (i = 0; i < conn->qlen; i++) {
+        ret = conn_rx_msg(conn, true, &msg);
+        if (ret < 0)
+            goto done;
+        assert(ret == 1);
+    }
+
+    conn_stats_print(conn);
+
     ret = _zhpeu_sock_recv_fixed_blob(conn->sock_fd, NULL, 0);
+    if (ret < 0)
+        goto done;
+
+    /* Finally a pingpong test. Handshake before beginning. */
+    ret = _zhpeu_sock_send_blob(conn->sock_fd, NULL, 0);
     if (ret < 0)
         goto done;
 
     /* Server only sends as many times as it receives. */
     conn_tx_stats_reset(conn);
-    conn_rx_stats_reset(conn, conn->rx_last);
+    conn_rx_stats_reset(conn, 0);
     for (tx_count = rx_count = warmup_count = 0, tx_stamp_idx = conn->zrq->head;
          tx_count != rx_count || tx_flag_in != TX_LAST; ) {
         /* Receive packets up to first miss. */
@@ -455,14 +459,7 @@ static int do_server_pong(struct stuff *conn)
 
     zhpeu_print_info("%s:op_cnt/warmup %lu/%lu\n",
                      zhpeu_appname, tx_count - warmup_count, warmup_count);
-    timing_print(&conn->tx_lat, "tx_lat", 1);
-    timing_print(&conn->tx_cmp, "tx_cmp", 1);
-    timing_print(&conn->rx_lat, "rx_lat", 1);
-    zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max %lu/%d rx_oos/max %lu/%d"
-                     " epoll %lu\n",
-                     zhpeu_appname, conn->tx_seq, conn->rx_seq,
-                     conn->tx_oos, conn->tx_oos_max,
-                     conn->rx_oos, conn->rx_oos_max, conn->epoll_cnt);
+    conn_stats_print(conn);
  done:
 
     return ret;
@@ -484,70 +481,94 @@ static int do_client_pong(struct stuff *conn)
     uint64_t            delta;
 
     zhpeq_print_xq_info(conn->zxq);
-    conn_tx_stats_reset(conn);
+
+    conn_rx_stats_reset(conn, 0);
 
     /*
-     * First, the sender will send conn->qlen messages with 2 * poll_cycles
-     * delay beween them.
+     * First, the client will send conn->qlen + 1 messages and then
+     * handshake across the socket until the server empties the RDM
+     * queue.
+     *
+     * The final message should result in status 0x93 and the queue
+     * should not be stopped if the bridge is properly configured.
+     *
+     * The client will wait for each send, so they should complete
+     * on both sides in order. The QD bits should be appearing in the
+     * XDM reponses as the RDM queue fills up, but this seems not to be
+     * working.
      */
-    for (i = 0; i < conn->qlen; i++) {
-        start = get_cycles(NULL);
-        do {
-            ret = conn_tx_completions(conn, false, true);
-            if (ret < 0)
-                goto done;
-        } while (get_cycles(NULL) - start < conn->poll_cycles * 2);
-        ret = conn_tx_msg(conn, 0, 0);
-        if (ret < 0)
-            goto done;
-    }
-
-    while (conn->tx_avail != conn->qlen) {
-        ret = conn_tx_completions(conn, false, true);
-        if (ret < 0)
-            goto done;
-    }
-
-    /* Receive queue is full; handshake over socket for overrun test. */
     ret = _zhpeu_sock_recv_fixed_blob(conn->sock_fd, NULL, 0);
     if (ret < 0)
         goto done;
 
+    conn_tx_stats_reset(conn);
+    for (i = 0; i < conn->qlen; i++) {
+        ret = conn_tx_msg(conn, 0, 0);
+        if (ret < 0)
+            goto done;
+        while (conn->tx_avail != conn->qlen) {
+            ret = conn_tx_completions(conn, false, true);
+            if (ret < 0)
+                goto done;
+        }
+    }
     ret = conn_tx_msg(conn, 0, 0);
     if (ret < 0)
         goto done;
-
     for (;;) {
         ret = conn_tx_completions(conn, true, true);
         if (!ret)
             continue;
-        if (!zhpeu_expected_saw("tx_eio", -EIO, ret))
-            goto done;
-        if (!zhpeu_expected_saw("tx_eio_avail", conn->qlen, conn->tx_avail))
-            goto done;
+        assert(ret == -EIO);
         break;
     }
-    timing_print(&conn->tx_lat, "tx_lat", 1);
-    timing_print(&conn->tx_cmp, "tx_cmp", 1);
-    zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max %lu/%d rx_oos/max %lu/%d"
-                     " epoll %lu\n",
-                     zhpeu_appname, conn->tx_seq, conn->rx_seq,
-                     conn->tx_oos, conn->tx_oos_max,
-                     conn->rx_oos, conn->rx_oos_max, conn->epoll_cnt);
+    conn_stats_print(conn);
 
     ret = _zhpeu_sock_send_blob(conn->sock_fd, NULL, 0);
     if (ret < 0)
         goto done;
 
-    /* Handshake over socket before starting ping-pong. */
+    /*
+     * Second, a test of polling behavor: the client will send 10000 messages
+     * with a minimum delay of 2 * poll_cycles between them. This should cause
+     * the should the server to use epoll for each message.
+     */
     ret = _zhpeu_sock_recv_fixed_blob(conn->sock_fd, NULL, 0);
     if (ret < 0)
         goto done;
+
+    conn_tx_stats_reset(conn);
+    for (i = 0; i < DEFAULT_EPOLL; i++) {
+        start = get_cycles(NULL);
+        ret = conn_tx_msg(conn, 0, 0);
+        if (ret < 0)
+            goto done;
+        while (conn->tx_avail != conn->qlen) {
+            ret = conn_tx_completions(conn, false, true);
+            if (ret < 0)
+                goto done;
+        }
+        while (get_cycles(NULL) - start < conn->poll_cycles * 2)
+            yield();
+    }
+
+    conn_stats_print(conn);
+
     ret = _zhpeu_sock_send_blob(conn->sock_fd, NULL, 0);
     if (ret < 0)
         goto done;
 
-    /* Client sends when it has available tx entries. */
+    /* Finally a pingpong test. Handshake before beginning. */
+    ret = _zhpeu_sock_recv_fixed_blob(conn->sock_fd, NULL, 0);
+    if (ret < 0)
+        goto done;
+
+    /*
+     * Client tracks notional numbers of receives available and
+     * doesn't overrun the server.
+     */
+    conn_tx_stats_reset(conn);
+    conn_rx_stats_reset(conn, 0);
     start = get_cycles(NULL);
     for (tx_count = rx_count = warmup_count = 0;
          tx_count != rx_count || tx_flag_out != TX_LAST; ) {
@@ -619,18 +640,9 @@ static int do_client_pong(struct stuff *conn)
         }
     }
 
-    zhpeq_print_xq_info(conn->zxq);
     zhpeu_print_info("%s:op_cnt/warmup %lu/%lu\n",
                      zhpeu_appname, tx_count - warmup_count, warmup_count);
-    timing_print(&conn->pp_lat, "pp_lat", 2);
-    timing_print(&conn->tx_lat, "tx_lat", 1);
-    timing_print(&conn->tx_cmp, "tx_cmp", 1);
-    timing_print(&conn->rx_lat, "rx_lat", 1);
-    zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max %lu/%d rx_oos/max %lu/%d"
-                     " epoll %lu\n",
-                     zhpeu_appname, conn->tx_seq, conn->rx_seq,
-                     conn->tx_oos, conn->tx_oos_max,
-                     conn->rx_oos, conn->rx_oos_max, conn->epoll_cnt);
+    conn_stats_print(conn);
  done:
 
     return ret;

@@ -432,7 +432,8 @@ static inline struct zhpe_rdm_entry *zhpeq_rq_valid(struct zhpeq_rq *zrq,
     uint32_t            qindex = zrq->head;
     struct zhpe_rdm_entry *rqe = zhpeq_q_entry(zrq->rq, qindex, qmask);
 
-    if (zhpeq_cmp_valid(rqe, qindex, qmask)) {
+    /* May not actually be likely, but we want to optimize success. */
+    if (likely(zhpeq_cmp_valid(rqe, qindex, qmask))) {
         if (increment) {
             zrq->head = qindex++;
             zhpeq_rq_head_update(zrq, false);

@@ -692,7 +692,8 @@ ssize_t zhpeq_xq_cq_read(struct zhpeq_xq *zxq,
 
     for (i = 0; i < n_entries; i++) {
         cqe = zxq->cq + (zxq->cq_head & qmask);
-        if (!zhpeq_cmp_valid(cqe, zxq->cq_head, qmask))
+        /* May not actually be unlikely, but we want to optimize success. */
+        if (unlikely(!zhpeq_cmp_valid(cqe, zxq->cq_head, qmask)))
             break;
         entries[i].z = cqe->entry;
         entries[i].z.context = get_context(xqi, &entries[i].z);
