@@ -777,7 +777,7 @@ int do_q_setup(struct stuff *conn)
     ret = _zhpeu_sock_recv_fixed_blob(conn->sock_fd, &q_msg, sizeof(q_msg));
     if (ret < 0)
         goto done;
-    q_msg.qlen = be64toh(conn->qlen);
+    q_msg.qlen = be64toh(q_msg.qlen);
     if (!zhpeu_expected_saw("qlen3", conn->qlen, q_msg.qlen)) {
         ret = -EIO;
         goto done;
