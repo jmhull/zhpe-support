@@ -398,7 +398,7 @@ static int do_server_pong(struct stuff *conn)
     }
     zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max %lu/%d rx_oos/max %lu/%d"
                      " epoll %lu\n",
-                     zhpeu_appname, conn->zxq->wq_tail, conn->zrq->head,
+                     zhpeu_appname, conn->tx_seq, conn->rx_seq,
                      conn->tx_oos, conn->tx_oos_max,
                      conn->rx_oos, conn->rx_oos_max, conn->epoll_cnt);
 
@@ -460,7 +460,7 @@ static int do_server_pong(struct stuff *conn)
     timing_print(&conn->rx_lat, "rx_lat", 1);
     zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max %lu/%d rx_oos/max %lu/%d"
                      " epoll %lu\n",
-                     zhpeu_appname, conn->zxq->wq_tail, conn->zrq->head,
+                     zhpeu_appname, conn->tx_seq, conn->rx_seq,
                      conn->tx_oos, conn->tx_oos_max,
                      conn->rx_oos, conn->rx_oos_max, conn->epoll_cnt);
  done:
@@ -531,7 +531,7 @@ static int do_client_pong(struct stuff *conn)
     timing_print(&conn->tx_cmp, "tx_cmp", 1);
     zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max %lu/%d rx_oos/max %lu/%d"
                      " epoll %lu\n",
-                     zhpeu_appname, conn->zxq->wq_tail, conn->zrq->head,
+                     zhpeu_appname, conn->tx_seq, conn->rx_seq,
                      conn->tx_oos, conn->tx_oos_max,
                      conn->rx_oos, conn->rx_oos_max, conn->epoll_cnt);
 
@@ -628,7 +628,7 @@ static int do_client_pong(struct stuff *conn)
     timing_print(&conn->rx_lat, "rx_lat", 1);
     zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max %lu/%d rx_oos/max %lu/%d"
                      " epoll %lu\n",
-                     zhpeu_appname, conn->zxq->wq_tail, conn->zrq->head,
+                     zhpeu_appname, conn->tx_seq, conn->rx_seq,
                      conn->tx_oos, conn->tx_oos_max,
                      conn->rx_oos, conn->rx_oos_max, conn->epoll_cnt);
  done:
