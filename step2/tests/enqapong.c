@@ -107,6 +107,7 @@ struct stuff {
     struct timing       pp_lat;
     struct zhpeq_rq_epoll_ring epoll_ring;
     size_t              tx_avail;
+    size_t              tx_max;
     size_t              qlen;
     uint32_t            dgcid;
     uint32_t            rspctxid;
@@ -236,7 +237,7 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start, uint8_t flag)
 }
 
 static ssize_t conn_tx_completions(struct stuff *conn, bool qfull_ok,
-                                   bool check_qd)
+                                   bool qd_check)
 {
     ssize_t             ret = 0;
     struct zhpeq_xq     *zxq = conn->zxq;
@@ -274,14 +275,24 @@ static ssize_t conn_tx_completions(struct stuff *conn, bool qfull_ok,
                                 zxq->cq_head - 1, zxq_comp[i].z.status);
             ret = -EIO;
         }
-        /* if (check_qd && zxq_comp[i].z.qd != conn->qd_last) */
-        if (zxq_comp[i].z.qd) {
+        if (qd_check && zxq_comp[i].z.qd != conn->qd_last) {
             zhpeu_print_info("%s,%u:index 0x%x qd 0x%x\n", __func__, __LINE__,
                              zxq->cq_head - 1, zxq_comp[i].z.status);
             conn->qd_last = zxq_comp[i].z.qd;
         }
     }
  done:
+
+    return ret;
+}
+
+static ssize_t conn_tx_completions_wait(struct stuff *conn, bool qfull_ok,
+                                       bool qd_check)
+{
+    int                 ret = 0;
+
+    while (conn->tx_avail != conn->tx_max && !ret)
+        ret = conn_tx_completions(conn, qfull_ok, qd_check);
 
     return ret;
 }
@@ -510,11 +521,9 @@ static int do_server_pong(struct stuff *conn)
     }
 
     /* Wait for all transmits to complete. */
-    while (conn->tx_avail != conn->qlen) {
-        ret = conn_tx_completions(conn, false, false);
-        if (ret < 0)
-            goto done;
-    }
+    ret = conn_tx_completions_wait(conn, false, false);
+    if (ret < 0)
+        goto done;
 
     zhpeu_print_info("%s:op_cnt/warmup %lu/%lu\n",
                      zhpeu_appname, op_count - warmup_count, warmup_count);
@@ -565,11 +574,9 @@ static int do_client_pong(struct stuff *conn)
         ret = conn_tx_msg(conn, 0, 0);
         if (ret < 0)
             goto done;
-        while (conn->tx_avail != conn->qlen) {
-            ret = conn_tx_completions(conn, false, true);
-            if (ret < 0)
-                goto done;
-        }
+        ret = conn_tx_completions_wait(conn, false, true);
+        if (ret < 0)
+            goto done;
     }
     ret = conn_tx_msg(conn, 0, 0);
     if (ret < 0)
@@ -602,11 +609,9 @@ static int do_client_pong(struct stuff *conn)
         ret = conn_tx_msg(conn, 0, 0);
         if (ret < 0)
             goto done;
-        while (conn->tx_avail != conn->qlen) {
-            ret = conn_tx_completions(conn, false, false);
-            if (ret < 0)
-                goto done;
-        }
+        ret = conn_tx_completions_wait(conn, false, false);
+        if (ret < 0)
+            goto done;
         while (get_cycles(NULL) - start < conn->poll_cycles * 2)
             yield();
     }
@@ -733,7 +738,7 @@ int do_q_setup(struct stuff *conn)
             goto done;
     } else
         conn->qlen = DEFAULT_QLEN;
-    conn->tx_avail = args->qlen;
+    conn->tx_max = conn->tx_avail = conn->qlen;
 
     conn->poll_cycles = usec_to_cycles(args->poll_usec ?: DEFAULT_POLL);
 
@@ -757,7 +762,7 @@ int do_q_setup(struct stuff *conn)
         goto done;
     }
     /*
-     * conn->qlen is the actual size of the queues; conn->tx_avail is the
+     * conn->qlen is the actual size of the queues; conn->tx_max is the
      * requested size of the queues. This will allow the user to specify
      * 16 and user only command buffers.
      */
