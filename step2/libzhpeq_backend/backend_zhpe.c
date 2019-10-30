@@ -530,19 +530,11 @@ static int zhpe_rq_epoll_del(struct zhpeq_rqi *rqi)
     int                 ret = 0;
     uint32_t            irq = rqi_irq(rqi);
     uint32_t            qnum = rqi_qnum(rqi);
-    struct zhpeq_rqi    *rqi_old;
+    struct zhpeq_rqi    *rqi_old = rqi;
 
     mutex_lock(&epoll_mutex);
 
-    for (;;) {
-        rqi_old = atm_load_rlx(&epoll_rqi[qnum]);
-        if (atm_cmpxchg(&epoll_rqi[qnum], &rqi_old, NULL))
-            break;
-    }
-    if (!rqi_old) {
-        /* Should never happen. */
-        abort();
-    }
+    (void)atm_cmpxchg(&epoll_rqi[qnum], &rqi_old, NULL);
 
     if (--(epoll_irq[irq].count))
         goto done;
