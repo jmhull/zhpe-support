@@ -807,35 +807,35 @@ static inline void *calloc_cachealigned(size_t nmemb, size_t size)
 #define _zhpeu_sockaddr_ntop(...)                               \
     zhpeu_call_null(zhpeu_sockaddr_ntop, char *, __VA_ARGS__)
 #define _zhpeu_sockaddr_str(...)                                \
-    zhpeu_call_null(zhpeu_dbg, zhpeu_sockaddr_str, char *, __VA_ARGS__)
+    zhpeu_call_null(zhpeu_err, zhpeu_sockaddr_str, char *, __VA_ARGS__)
 #define _zhpeu_get_cpu_info_val(...)                            \
-    zhpeu_call_null(zhpeu_dbg, zhpeu_get_cpuinfo_val, char *, __VA_ARGS__)
+    zhpeu_call_null(zhpeu_err, zhpeu_get_cpuinfo_val, char *, __VA_ARGS__)
 #define _zhpeu_parse_kb_uint64_t(...)                           \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_parse_kb_uint64_t, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_parse_kb_uint64_t, int, __VA_ARGS__)
 #define _zhpeu_sock_getaddrinfo(...)                            \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_getaddrinfo, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_sock_getaddrinfo, int, __VA_ARGS__)
 #define _zhpeu_sock_connect(...)                                \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_connect, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_sock_connect, int, __VA_ARGS__)
 #define _zhpeu_sock_getsockname(...)                            \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_getsockname, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_sock_getsockname, int, __VA_ARGS__)
 #define _zhpeu_sock_getpeername(...)                            \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_getpeername, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_sock_getpeername, int, __VA_ARGS__)
 #define _zhpeu_sock_send_blob(...)                              \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_send_blob, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_sock_send_blob, int, __VA_ARGS__)
 #define _zhpeu_sock_recv_fixed_blob(...)                        \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_recv_fixed_blob, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_sock_recv_fixed_blob, int, __VA_ARGS__)
 #define _zhpeu_sock_recv_var_blob(...)                          \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_recv_var_blob, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_sock_recv_var_blob, int, __VA_ARGS__)
 #define _zhpeu_sock_send_string(...)                            \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_send_string, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_sock_send_string, int, __VA_ARGS__)
 #define _zhpeu_sock_recv_string(...)                            \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_recv_string, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_sock_recv_string, int, __VA_ARGS__)
 #define _zhpeu_munmap(...)                                      \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_munmap, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_munmap, int, __VA_ARGS__)
 #define _zhpeu_mmap(...)                                        \
-    zhpeu_call_null(zhpeu_dbg, zhpeu_mmap, void *, __VA_ARGS__)
+    zhpeu_call_null(zhpeu_err, zhpeu_mmap, void *, __VA_ARGS__)
 #define _zhpeu_get_cpuinfo_val(...)                             \
-    zhpeu_call_null(zhpeu_dbg, zhpeu_get_cpuinfo_val, void *, __VA_ARGS__)
+    zhpeu_call_null(zhpeu_err, zhpeu_get_cpuinfo_val, void *, __VA_ARGS__)
 
 static inline uint64_t roundup64(uint64_t val, uint64_t round)
 {
