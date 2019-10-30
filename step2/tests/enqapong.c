@@ -390,7 +390,7 @@ static int do_server_pong(struct stuff *conn)
 
     /* Receive all pending entries. */
     conn_rx_stats_reset(conn, 0);
-    for (i = 0; i < conn->qlen; i++) {
+    for (i = 0; i < DEFAULT_EPOLL; i++) {
         ret = conn_rx_msg(conn, true, &msg);
         if (ret < 0)
             goto done;
