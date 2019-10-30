@@ -538,7 +538,7 @@ static int do_client_pong(struct stuff *conn)
         if (ret < 0)
             goto done;
         while (conn->tx_avail != conn->qlen) {
-            ret = conn_tx_completions(conn, false, true);
+            ret = conn_tx_completions(conn, false, false);
             if (ret < 0)
                 goto done;
         }
