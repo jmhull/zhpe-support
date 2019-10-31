@@ -995,6 +995,8 @@ static int do_client(const struct args *args)
 
     /* Run test. */
     ret = do_client_pong(&conn);
+    if (ret < 0)
+        goto done;
 
     /* Completion handshake. */
     ret = _zhpeu_sock_send_blob(conn.sock_fd, NULL, 0);
@@ -1003,7 +1005,6 @@ static int do_client(const struct args *args)
     ret = _zhpeu_sock_recv_fixed_blob(conn.sock_fd, NULL, 0);
     if (ret < 0)
         goto done;
-
  done:
     stuff_free(&conn);
 
