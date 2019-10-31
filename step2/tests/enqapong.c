@@ -367,7 +367,7 @@ uint32_t rx_log_idx;
 
 void do_rx_log(uint line, uint32_t head, uint64_t v0, uint64_t v1, uint64_t v2)
 {
-    uint32_t i = rx_log_idx++;
+    uint32_t i = rx_log_idx++ & (ARRAY_SIZE(rx_log) - 1);
 
     rx_log[i].line = line;
     rx_log[i].head = head;
