@@ -606,10 +606,10 @@ static int do_client_pong(struct stuff *conn)
         if (ret < 0)
             goto done;
     }
+#if 0
     ret = conn_tx_msg(conn, 0, 0);
     if (ret < 0)
         goto done;
-#if 0
     for (;;) {
         ret = conn_tx_completions(conn, true, true);
         if (!ret)
