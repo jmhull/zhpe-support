@@ -459,7 +459,7 @@ static int do_server_pong(struct stuff *conn)
     uint64_t            warmup_count;
     uint64_t            i;
     struct enqa_msg     msg;
-    uint32_t            rx_seq;
+    uint32_t            rx_seq MAYBE_UNUSED;
 
     zhpeq_print_xq_info(conn->zxq);
 
@@ -479,15 +479,14 @@ static int do_server_pong(struct stuff *conn)
 
     /* Receive all the pending entries. */
     conn_rx_stats_reset(conn, 0);
-    rx_seq = conn->rx_seq;
-    for (i = 0; i < conn->qlen; i++) {
+    for (i = 0, rx_seq = conn->rx_seq; i < conn->qlen; i++, rx_seq++) {
         ret = conn_rx_msg(conn, &msg, false);
         if (ret < 0)
             goto done;
         if (!ret)
             continue;
-        assert(be32toh(msg.seq) == i + rx_seq);
-        assert(conn->rx_seq == i + rx_seq + 1);
+        assert(be32toh(msg.seq) == rx_seq);
+        assert(conn->rx_seq == rx_seq + 1);
     }
 
     conn_stats_print(conn);
@@ -499,14 +498,13 @@ static int do_server_pong(struct stuff *conn)
 
     /* Receive all pending entries. */
     conn_rx_stats_reset(conn, 0);
-    rx_seq = conn->rx_seq;
-    for (i = 0; i < DEFAULT_EPOLL; i++) {
+    for (i = 0, rx_seq = conn->rx_seq; i < DEFAULT_EPOLL; i++, rx_seq++) {
         ret = conn_rx_msg(conn, &msg, true);
         if (ret < 0)
             goto done;
         assert(ret == 1);
-        assert(be32toh(msg.seq) == i + rx_seq);
-        assert(conn->rx_seq == i + rx_seq + 1);
+        assert(be32toh(msg.seq) == rx_seq);
+        assert(conn->rx_seq == rx_seq + 1);
     }
 
     conn_stats_print(conn);
@@ -523,7 +521,8 @@ static int do_server_pong(struct stuff *conn)
     /* Server only sends as many times as it receives. */
     conn_tx_stats_reset(conn);
     conn_rx_stats_reset(conn, 0);
-    for (op_count = warmup_count = 0; tx_flag_in != TX_LAST; op_count++) {
+    for (op_count = warmup_count = 0, rx_seq = conn->rx_seq;
+         tx_flag_in != TX_LAST; op_count++, rx_seq++) {
         /*
          * Receive a packet, send a packet: we are guaranteed the messages are
          * in sequence; we send an immediate reply to so we don't have to
@@ -537,6 +536,8 @@ static int do_server_pong(struct stuff *conn)
             if (unlikely(ret < 0))
                 goto done;
         }
+        assert(be32toh(msg.seq) == rx_seq);
+        assert(conn->rx_seq == rx_seq + 1);
         if (msg.flag != tx_flag_in) {
             if (tx_flag_in == TX_WARMUP) {
                 warmup_count = op_count;
@@ -584,6 +585,7 @@ static int do_client_pong(struct stuff *conn)
     struct enqa_msg     msg;
     uint64_t            start;
     uint64_t            delta;
+    uint32_t            rx_seq MAYBE_UNUSED;
 
     zhpeq_print_xq_info(conn->zxq);
 
@@ -673,16 +675,20 @@ static int do_client_pong(struct stuff *conn)
      */
     conn_tx_stats_reset(conn);
     conn_rx_stats_reset(conn, 0);
+    rx_seq = conn->rx_seq;
     start = get_cycles(NULL);
     for (tx_count = rx_count = warmup_count = 0;
          tx_count != rx_count || tx_flag_out != TX_LAST; ) {
         /* Receive packets up to first miss. */
-        for (;tx_flag_in != TX_LAST; rx_count++) {
+        for (rx_seq = conn->rx_seq;tx_flag_in != TX_LAST;
+             rx_count++, rx_seq++) {
             ret = conn_rx_msg(conn, &msg, false);
             if (unlikely(ret < 0))
                 goto done;
             if (!ret)
                 break;
+            assert(be32toh(msg.seq) == rx_seq);
+            assert(conn->rx_seq == rx_seq + 1);
             /* Messages are in sequence. */
             rx_avail++;
             if (msg.flag != tx_flag_in) {
