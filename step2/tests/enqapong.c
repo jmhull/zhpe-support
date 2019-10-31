@@ -487,7 +487,7 @@ static int do_server_pong(struct stuff *conn)
         if (!ret)
             continue;
         assert(be32toh(msg.seq) == i + rx_seq);
-        assert(conn->rx_seq == i + rx_seq);
+        assert(conn->rx_seq == i + rx_seq + 1);
     }
 
     conn_stats_print(conn);
@@ -499,12 +499,14 @@ static int do_server_pong(struct stuff *conn)
 
     /* Receive all pending entries. */
     conn_rx_stats_reset(conn, 0);
+    rx_seq = conn->rx_seq;
     for (i = 0; i < DEFAULT_EPOLL; i++) {
         ret = conn_rx_msg(conn, &msg, true);
         if (ret < 0)
             goto done;
         assert(ret == 1);
-        assert(be32toh(msg.seq) == i);
+        assert(be32toh(msg.seq) == i + rx_seq);
+        assert(conn->rx_seq == i + rx_seq + 1);
     }
 
     conn_stats_print(conn);
