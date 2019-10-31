@@ -418,10 +418,11 @@ static inline void *zhpeq_q_entry(void *entries, uint32_t qindex,
 
 void __zhpeq_rq_head_update(struct zhpeq_rq *zrq);
 
-static inline void zhpeq_rq_head_update(struct zhpeq_rq *zrq, bool force)
+static inline void zhpeq_rq_head_update(struct zhpeq_rq *zrq, bool zero)
 {
-    if (force ||
-        unlikely(zrq->head - zrq->head_commit > zrq->rqinfo.cmplq.ent / 4))
+    uint32_t            threshold = (zero ? 0 : zrq->rqinfo.cmplq.ent / 4);
+
+    if (unlikely(zrq->head - zrq->head_commit > threshold))
         __zhpeq_rq_head_update(zrq);
 }
 
@@ -439,12 +440,9 @@ static inline struct zhpe_rdm_entry *zhpeq_rq_entry_valid(struct zhpeq_rq *zrq)
     return NULL;
 }
 
-static inline void zhpeq_rq_entry_done(struct zhpeq_rq *zrq, uint32_t nentries,
-                                       bool head_update)
+static inline void zhpeq_rq_entry_done(struct zhpeq_rq *zrq, uint32_t nentries)
 {
     zrq->head += nentries;
-    if (head_update)
-        zhpeq_rq_head_update(zrq, false);
 }
 
 int zhpeq_rq_wait_check(struct zhpeq_rq *zrq, uint64_t poll_cycles);

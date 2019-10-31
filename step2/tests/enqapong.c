@@ -330,7 +330,8 @@ static int conn_rx_oos_insert(struct stuff *conn, struct zhpe_rdm_entry *rqe,
     conn->rx_oos_ent[off] = *rqe;
     conn->rx_oos_ent[off].hdr.valid = 1;
     /* Advance the queue head, but not conn->rx_seq. */
-    zhpeq_rq_entry_done(conn->zrq, 1, true);
+    zhpeq_rq_entry_done(conn->zrq, 1);
+    zhpeq_rq_head_update(conn->zrq, true);
  done:
     return ret;
 }
@@ -431,7 +432,8 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
                 conn->rx_seq++;
                 *msg_out = *msg;
                 assert(!memcmp(msg_out, msg, sizeof(*msg)));
-                zhpeq_rq_entry_done(zrq, 1, true);
+                zhpeq_rq_entry_done(zrq, 1);
+                zhpeq_rq_head_update(zrq, false);
                 ret = 1;
             } else
                 ret = conn_rx_oos(conn, msg_out, oos, rqe);
@@ -705,7 +707,7 @@ static int do_client_pong(struct stuff *conn)
             timing_update(&conn->pp_lat,
                           get_cycles(NULL) - be64toh(msg.pp_start));
         }
-
+        zhpeq_rq_head_update(conn->zrq, true);
         ret = _conn_tx_completions(conn, false, false);
         if (ret < 0)
             goto done;
