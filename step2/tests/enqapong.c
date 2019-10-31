@@ -47,11 +47,14 @@
 #define DEFAULT_POLL    (100U)
 #define DEFAULT_QLEN    (1023U)
 #define DEFAULT_WARMUP  (100U)
-#define DEFAULT_EPOLL   (1023U)
-/* ! */
+#define DEFAULT_EPOLL   (10000U)
+
+static struct zhpeq_attr zhpeq_attr;
+
 struct cli_wire_msg {
     uint64_t            poll_usec;
-    uint64_t            qlen;
+    uint64_t            rqlen;
+    uint64_t            tqlen;
     bool                once_mode;
 };
 
@@ -67,7 +70,8 @@ struct args {
     const char          *service;
     uint64_t            ring_ops;
     uint64_t            warmup;
-    uint64_t            qlen;
+    uint64_t            rqlen;
+    uint64_t            tqlen;
     uint64_t            poll_usec;
     bool                once_mode;
     bool                seconds_mode;
@@ -108,7 +112,8 @@ struct stuff {
     struct zhpeq_rq_epoll_ring epoll_ring;
     size_t              tx_avail;
     size_t              tx_max;
-    size_t              qlen;
+    size_t              rqlen;
+    size_t              tqlen;
     uint32_t            dgcid;
     uint32_t            rspctxid;
     int                 open_idx;
@@ -388,7 +393,7 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
 {
     int                 ret = 0;
     struct zhpeq_rq     *zrq = conn->zrq;
-    struct zhpe_rdm_entry *rqe = NULL; /* ! */
+    struct zhpe_rdm_entry *rqe;
     struct enqa_msg     *msg;
     uint64_t            now;
     uint32_t            oos;
@@ -466,7 +471,7 @@ static int do_server_pong(struct stuff *conn)
     conn_tx_stats_reset(conn);
 
     /*
-     * First, the client will send conn->qlen  + 1 messages to overrun the
+     * First, the client will send conn->rqlen  + 1 messages to overrun the
      * receive queue. We will not read the receive queue until the server
      * handshakes over the socket.
      */
@@ -479,7 +484,7 @@ static int do_server_pong(struct stuff *conn)
 
     /* Receive all the pending entries. */
     conn_rx_stats_reset(conn, 0);
-    for (i = 0, rx_seq = conn->rx_seq; i < conn->qlen; i++, rx_seq++) {
+    for (i = 0, rx_seq = conn->rx_seq; i < conn->rqlen; i++, rx_seq++) {
         ret = conn_rx_msg(conn, &msg, false);
         if (ret < 0)
             goto done;
@@ -577,7 +582,7 @@ static int do_client_pong(struct stuff *conn)
     const struct args   *args = conn->args;
     uint                tx_flag_in = TX_NONE;
     uint                tx_flag_out = TX_WARMUP;
-    uint64_t            rx_avail = conn->qlen;
+    uint64_t            rx_avail = conn->rqlen;
     uint64_t            tx_count;
     uint64_t            rx_count;
     uint64_t            warmup_count;
@@ -592,7 +597,7 @@ static int do_client_pong(struct stuff *conn)
     conn_rx_stats_reset(conn, 0);
 
     /*
-     * First, the client will send conn->qlen + 1 messages and then
+     * First, the client will send conn->rqlen + 1 messages and then
      * handshake across the socket until the server empties the RDM
      * queue.
      *
@@ -609,7 +614,7 @@ static int do_client_pong(struct stuff *conn)
         goto done;
 
     conn_tx_stats_reset(conn);
-    for (i = 0; i < conn->qlen; i++) {
+    for (i = 0; i < conn->rqlen; i++) {
         ret = conn_tx_msg(conn, 0, 0);
         if (ret < 0)
             goto done;
@@ -617,7 +622,6 @@ static int do_client_pong(struct stuff *conn)
         if (ret < 0)
             goto done;
     }
-#if 0
     ret = conn_tx_msg(conn, 0, 0);
     if (ret < 0)
         goto done;
@@ -629,7 +633,6 @@ static int do_client_pong(struct stuff *conn)
 
         break;
     }
-#endif
     conn_stats_print(conn);
 
     ret = _zhpeu_sock_send_blob(conn->sock_fd, NULL, 0);
@@ -758,8 +761,9 @@ static int do_client_pong(struct stuff *conn)
 }
 
 struct q_wire_msg {
-    /* Actual queue length. */
-    uint64_t            qlen;
+    /* Actual queue lengths. */
+    uint64_t            rqlen;
+    uint64_t            tqlen;
 };
 
 int do_q_setup(struct stuff *conn)
@@ -768,23 +772,22 @@ int do_q_setup(struct stuff *conn)
     const struct args   *args = conn->args;
     union sockaddr_in46 sa;
     size_t              sa_len = sizeof(sa);
-    struct zhpeq_attr   attr;
     struct q_wire_msg   q_msg;
 
-    ret = zhpeq_query_attr(&attr);
-    if (ret < 0) {
-        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_query_attr", "", ret);
-        goto done;
-    }
-
     ret = -EINVAL;
-    conn->qlen = args->qlen;
-    if (conn->qlen) {
-        if (conn->qlen > attr.z.max_tx_qlen)
+    conn->tqlen = args->tqlen;
+    if (conn->tqlen) {
+        if (conn->tqlen > zhpeq_attr.z.max_tx_qlen)
             goto done;
     } else
-        conn->qlen = DEFAULT_QLEN;
-    conn->tx_max = conn->tx_avail = conn->qlen;
+        conn->tqlen = DEFAULT_QLEN;
+
+    conn->rqlen = args->rqlen;
+    if (conn->rqlen) {
+        if (conn->rqlen > zhpeq_attr.z.max_rx_qlen)
+            goto done;
+    } else
+        conn->rqlen = DEFAULT_QLEN;
 
     conn->poll_cycles = usec_to_cycles(args->poll_usec ?: DEFAULT_POLL);
 
@@ -795,48 +798,50 @@ int do_q_setup(struct stuff *conn)
         goto done;
     }
     /* Allocate zqueues. */
-    ret = zhpeq_xq_alloc(conn->zdom, conn->qlen, conn->qlen,
+    ret = zhpeq_xq_alloc(conn->zdom, conn->tqlen, conn->tqlen,
                          0, 0, 0,  &conn->zxq);
     if (ret < 0) {
         zhpeu_print_func_err(__func__, __LINE__, "zhpeq_xq_alloc", "", ret);
         goto done;
     }
+    /*
+     * conn->tqlen is the actual size of the tx queue; conn->tx_max is the
+     * requested size of the tx queue. This will allow the user to
+     * specify 16 and user only command buffers.
+     */
+    conn->tx_max = conn->tx_avail = conn->tqlen;
+    conn->tqlen = conn->zxq->xqinfo.cmdq.ent - 1;
 
-    ret = zhpeq_rq_alloc(conn->zdom, conn->qlen * 4, 0, &conn->zrq);
+    ret = zhpeq_rq_alloc(conn->zdom, conn->rqlen, 0, &conn->zrq);
     if (ret < 0) {
         zhpeu_print_func_err(__func__, __LINE__, "zhpeq_rq_alloc", "", ret);
         goto done;
     }
-    /*
-     * conn->qlen is the actual size of the queues; conn->tx_max is the
-     * requested size of the queues. This will allow the user to specify
-     * 16 and user only command buffers.
-     */
-    conn->qlen = conn->zxq->xqinfo.cmdq.ent - 1;
-#if 0
+    conn->rqlen = conn->zrq->rqinfo.cmplq.ent - 1;
     if (!zhpeu_expected_saw("qlen1", conn->zxq->xqinfo.cmdq.ent,
-                            conn->zxq->xqinfo.cmplq.ent) ||
-        !zhpeu_expected_saw("qlen2", conn->zxq->xqinfo.cmdq.ent,
-                            conn->zrq->rqinfo.cmplq.ent)) {
+                            conn->zxq->xqinfo.cmplq.ent)) {
         ret = -EIO;
         goto done;
     }
-#endif
-    /* Exchange resulting queue length between client and server. */
-    q_msg.qlen = htobe64(conn->qlen);
+
+    /* Paranoia:exchange and compare queue lengths between client and server. */
+    q_msg.rqlen = htobe64(conn->rqlen);
+    q_msg.tqlen = htobe64(conn->tqlen);
     ret = _zhpeu_sock_send_blob(conn->sock_fd, &q_msg, sizeof(q_msg));
     if (ret < 0)
         goto done;
     ret = _zhpeu_sock_recv_fixed_blob(conn->sock_fd, &q_msg, sizeof(q_msg));
     if (ret < 0)
         goto done;
-    q_msg.qlen = be64toh(q_msg.qlen);
-    if (!zhpeu_expected_saw("qlen3", conn->qlen, q_msg.qlen)) {
+    q_msg.rqlen = be64toh(q_msg.rqlen);
+    q_msg.tqlen = be64toh(q_msg.tqlen);
+    if (!zhpeu_expected_saw("qlen2", conn->rqlen, q_msg.rqlen) ||
+        !zhpeu_expected_saw("qlen3", conn->rqlen, q_msg.rqlen)) {
         ret = -EIO;
         goto done;
     }
 
-    /* Get address index. */
+    /* Exchange addresses. */
     ret = zhpeq_rq_xchg_addr(conn->zrq, conn->sock_fd, &sa, &sa_len);
     if (ret < 0) {
         zhpeu_print_func_err(__func__, __LINE__, "zhpeq_xq_xchg_addr", "", ret);
@@ -889,7 +894,8 @@ static int do_server_one(const struct args *oargs, int conn_fd)
         goto done;
 
     args->poll_usec = be64toh(cli_msg.poll_usec);
-    args->qlen = be64toh(cli_msg.qlen);
+    args->rqlen = be64toh(cli_msg.rqlen);
+    args->tqlen = be64toh(cli_msg.tqlen);
     args->once_mode = cli_msg.once_mode;
 
     ret = do_q_setup(&conn);
@@ -991,7 +997,8 @@ static int do_client(const struct args *args)
 
     /* Send arguments to the server. */
     cli_msg.poll_usec = htobe64(args->poll_usec);
-    cli_msg.qlen = htobe64(args->qlen);
+    cli_msg.rqlen = htobe64(args->rqlen);
+    cli_msg.tqlen = htobe64(args->tqlen);
     cli_msg.once_mode = args->once_mode;
 
     ret = _zhpeu_sock_send_blob(conn.sock_fd, &cli_msg, sizeof(cli_msg));
@@ -1047,14 +1054,15 @@ static void usage(bool help)
         "All sizes may be postfixed with [kmgtKMGT] to specify the"
         " base units.\n"
         "Lower case is base 10; upper case is base 2.\n"
-        "Server requires just port; client requires all 5 arguments.\n"
+        "Server requires just port; client requires all 3 arguments.\n"
         "Client only options:\n"
         " -o : run once and then server will exit\n"
-        " -s : treat the final argument as seconds\n"
         " -p <poll_usec> : length of receive polling before sleeping\n"
-        " -q <qlen> : tx and rx queue length\n"
+        " -r <qlen> : rx queue length (default %u)\n"
+        " -s : treat the final argument as seconds\n"
+        " -t <qlen> : tx queue length (default %u)\n"
         " -w <ops> : number of warmup operations\n",
-        zhpeu_appname);
+        zhpeu_appname, DEFAULT_QLEN, DEFAULT_QLEN);
 
     if (help)
         zhpeq_print_xq_info(NULL);
@@ -1080,10 +1088,16 @@ int main(int argc, char **argv)
         goto done;
     }
 
+    ret = zhpeq_query_attr(&zhpeq_attr);
+    if (ret < 0) {
+        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_query_attr", "", ret);
+        goto done;
+    }
+
     if (argc == 1)
         usage(true);
 
-    while ((opt = getopt(argc, argv, "op:q:sw:")) != -1) {
+    while ((opt = getopt(argc, argv, "op:r:st:w:")) != -1) {
 
         /* All opts are client only, now. */
         client_opt = true;
@@ -1105,11 +1119,12 @@ int main(int argc, char **argv)
                 usage(false);
             break;
 
-        case 'q':
-            if (args.qlen)
+        case 'r':
+            if (args.rqlen)
                 usage(false);
-            if (_zhpeu_parse_kb_uint64_t("qlen", optarg, &args.qlen, 0, 1,
-                                         SIZE_MAX, PARSE_KB | PARSE_KIB) < 0)
+            if (_zhpeu_parse_kb_uint64_t("rlen", optarg, &args.rqlen, 0, 1,
+                                         zhpeq_attr.z.max_rx_qlen,
+                                         PARSE_KB | PARSE_KIB) < 0)
                 usage(false);
             break;
 
@@ -1117,6 +1132,15 @@ int main(int argc, char **argv)
             if (args.seconds_mode)
                 usage(false);
             args.seconds_mode = true;
+            break;
+
+        case 't':
+            if (args.tqlen)
+                usage(false);
+            if (_zhpeu_parse_kb_uint64_t("tqlen", optarg, &args.tqlen, 0, 1,
+                                         zhpeq_attr.z.max_tx_qlen,
+                                         PARSE_KB | PARSE_KIB) < 0)
+                usage(false);
             break;
 
         case 'w':
