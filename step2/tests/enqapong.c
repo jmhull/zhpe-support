@@ -490,11 +490,10 @@ static int do_server_pong(struct stuff *conn)
     /* Receive all pending entries. */
     conn_rx_stats_reset(conn, 0);
     for (i = 0; i < DEFAULT_EPOLL; i++) {
-        ret = conn_rx_msg(conn, &msg, false);
+        ret = conn_rx_msg(conn, &msg, true);
         if (ret < 0)
             goto done;
-        if (!ret)
-            continue;
+        assert(ret == 1);
         assert(be32toh(msg.seq) == i);
     }
 
