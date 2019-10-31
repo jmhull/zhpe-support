@@ -609,13 +609,16 @@ static int do_client_pong(struct stuff *conn)
     ret = conn_tx_msg(conn, 0, 0);
     if (ret < 0)
         goto done;
+#if 0
     for (;;) {
         ret = conn_tx_completions(conn, true, true);
         if (!ret)
             continue;
         assert(ret == -EIO);
+
         break;
     }
+#endif
     conn_stats_print(conn);
 
     ret = _zhpeu_sock_send_blob(conn->sock_fd, NULL, 0);
