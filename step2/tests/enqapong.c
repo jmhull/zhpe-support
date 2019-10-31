@@ -339,7 +339,7 @@ static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
                        uint32_t oos, struct zhpe_rdm_entry *rqe)
 {
     int                 ret;
-    uint32_t            off;
+    int32_t             off;
 
     /* Assume 0, 3, 2, 1, 4, ...  */
     if (!conn->rx_oos_ent_cnt) {
@@ -358,8 +358,8 @@ static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
      *
      * If there is no saved entry, then we save the new entry.
      */
-    off = conn->rx_seq - conn->rx_oos_ent_base;
-    if (conn->rx_oos_ent[off].hdr.valid) {
+    off = (int32_t)(conn->rx_seq - conn->rx_oos_ent_base);
+    if (off >= 0 && conn->rx_oos_ent[off].hdr.valid) {
         conn->rx_oos_ent_cnt--;
         *msg_out = *(struct enqa_msg *)conn->rx_oos_ent[off].payload;
         conn->rx_oos_ent[off].hdr.valid = 0;
