@@ -339,16 +339,11 @@ static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
                        uint32_t oos, struct zhpe_rdm_entry *rqe)
 {
     int                 ret;
-    int32_t             off;
+    uint32_t            off;
 
     /* Assume 0, 3, 2, 1, 4, ...  */
     if (!conn->rx_oos_ent_cnt) {
-        /*
-         * Given the example above: conn->rx_seq == 1 and oos == 2; we know
-         * we don't have to save the rqe for tx_seq == 1, so the base for
-         * saving things starts at conn->rx_seq + 1 or 2.
-         */
-        conn->rx_oos_ent_base = conn->rx_seq + 1;
+        conn->rx_oos_ent_base = conn->rx_seq;
         ret = conn_rx_oos_insert(conn, rqe, oos);
         goto done;
     }
@@ -358,8 +353,12 @@ static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
      *
      * If there is no saved entry, then we save the new entry.
      */
-    off = (int32_t)(conn->rx_seq - conn->rx_oos_ent_base);
-    if (off >= 0 && conn->rx_oos_ent[off].hdr.valid) {
+    off = conn->rx_seq - conn->rx_oos_ent_base;
+    if (off >= ARRAY_SIZE(conn->rx_oos_ent)) {
+        ret = -EIO;
+        goto done;
+    }
+    if (conn->rx_oos_ent[off].hdr.valid) {
         conn->rx_oos_ent_cnt--;
         *msg_out = *(struct enqa_msg *)conn->rx_oos_ent[off].payload;
         conn->rx_oos_ent[off].hdr.valid = 0;
