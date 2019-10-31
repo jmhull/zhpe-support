@@ -421,7 +421,7 @@ void __zhpeq_rq_head_update(struct zhpeq_rq *zrq);
 static inline void zhpeq_rq_head_update(struct zhpeq_rq *zrq, bool force)
 {
     if (force ||
-        unlikely(zrq->head - zrq->head_commit > zrq->rqinfo.cmplq.ent / 2))
+        unlikely(zrq->head - zrq->head_commit > zrq->rqinfo.cmplq.ent / 4))
         __zhpeq_rq_head_update(zrq);
 }
 
