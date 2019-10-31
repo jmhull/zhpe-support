@@ -361,7 +361,7 @@ struct rx_log {
     uint64_t v[3];
 };
 
-struct rx_log rx_log[1024];
+struct rx_log rx_log[4096];
 
 uint32_t rx_log_idx;
 
