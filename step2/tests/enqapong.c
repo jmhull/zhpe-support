@@ -875,6 +875,8 @@ static int do_server_one(const struct args *oargs, int conn_fd)
 
     /* Run test. */
     ret = do_server_pong(&conn);
+    if (ret < 0)
+        goto done;
 
     /* Completion handshake. */
     ret = _zhpeu_sock_recv_fixed_blob(conn.sock_fd, NULL, 0);
