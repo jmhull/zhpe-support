@@ -784,7 +784,7 @@ int do_q_setup(struct stuff *conn)
         goto done;
     }
 
-    ret = zhpeq_rq_alloc(conn->zdom, conn->qlen, 0, &conn->zrq);
+    ret = zhpeq_rq_alloc(conn->zdom, conn->qlen * 4, 0, &conn->zrq);
     if (ret < 0) {
         zhpeu_print_func_err(__func__, __LINE__, "zhpeq_rq_alloc", "", ret);
         goto done;
@@ -795,6 +795,7 @@ int do_q_setup(struct stuff *conn)
      * 16 and user only command buffers.
      */
     conn->qlen = conn->zxq->xqinfo.cmdq.ent - 1;
+#if 0
     if (!zhpeu_expected_saw("qlen1", conn->zxq->xqinfo.cmdq.ent,
                             conn->zxq->xqinfo.cmplq.ent) ||
         !zhpeu_expected_saw("qlen2", conn->zxq->xqinfo.cmdq.ent,
@@ -802,6 +803,7 @@ int do_q_setup(struct stuff *conn)
         ret = -EIO;
         goto done;
     }
+#endif
     /* Exchange resulting queue length between client and server. */
     q_msg.qlen = htobe64(conn->qlen);
     ret = _zhpeu_sock_send_blob(conn->sock_fd, &q_msg, sizeof(q_msg));
