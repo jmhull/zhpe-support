@@ -697,6 +697,7 @@ ssize_t zhpeq_xq_cq_read(struct zhpeq_xq *zxq,
             break;
         entries[i].z = cqe->entry;
         entries[i].z.context = get_context(xqi, &entries[i].z);
+        entries[i].z.cqe = (void *)cqe;
         zhpe_stats_stamp(zhpe_stats_subid(ZHPQ, 80), (uintptr_t)zxq,
                          entries[i].z.index, (uintptr_t)entries[i].z.context);
         zxq->cq_head++;

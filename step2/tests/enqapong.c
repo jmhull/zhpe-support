@@ -270,14 +270,17 @@ static ssize_t conn_tx_completions(struct stuff *conn, bool qfull_ok,
         if (zxq_comp[i].z.status != ZHPEQ_XQ_CQ_STATUS_SUCCESS) {
             if (!qfull_ok ||
                 zxq_comp[i].z.status != ZHPE_HW_CQ_STATUS_GENZ_RDM_QUEUE_FULL)
-                zhpeu_print_err("%s,%u:index 0x%x status 0x%x\n",
+                zhpeu_print_err("%s,%u:cqe %p ctx %p index 0x%x status 0x%x\n",
                                 __func__, __LINE__,
-                                zxq->cq_head - 1, zxq_comp[i].z.status);
+                                zxq_comp[i].z.cqe, zxq_comp[i].z.context,
+                                zxq_comp[i].z.index, zxq_comp[i].z.status);
             ret = -EIO;
         }
         if (qd_check && zxq_comp[i].z.qd != conn->qd_last) {
-            zhpeu_print_info("%s,%u:index 0x%x qd 0x%x\n", __func__, __LINE__,
-                             zxq->cq_head - 1, zxq_comp[i].z.status);
+            zhpeu_print_info("%s,%u:cqe %p ctx %p index 0x%x qd 0x%x\n",
+                             __func__, __LINE__,
+                             zxq_comp[i].z.cqe, zxq_comp[i].z.context,
+                             zxq_comp[i].z.index, zxq_comp[i].z.qd);
             conn->qd_last = zxq_comp[i].z.qd;
         }
     }
