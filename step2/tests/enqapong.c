@@ -47,8 +47,8 @@
 #define DEFAULT_POLL    (100U)
 #define DEFAULT_QLEN    (1023U)
 #define DEFAULT_WARMUP  (100U)
-#define DEFAULT_EPOLL   (10000U)
-
+#define DEFAULT_EPOLL   (1023U)
+/* ! */
 struct cli_wire_msg {
     uint64_t            poll_usec;
     uint64_t            qlen;
