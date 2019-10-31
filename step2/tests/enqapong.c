@@ -144,18 +144,22 @@ static void conn_tx_stats_reset(struct stuff *conn)
 {
     timing_reset(&conn->tx_lat);
     timing_reset(&conn->tx_cmp);
+#if 0
     conn->tx_seq = 0;
     conn->cq_seq = 0;
     conn->tx_oos = 0;
     conn->tx_oos_max = 0;
+#endif
 }
 
 static void conn_rx_stats_reset(struct stuff *conn, uint64_t rx_last)
 {
     timing_reset(&conn->rx_lat);
+#if 0
     conn->rx_seq = 0;
     conn->rx_oos = 0;
     conn->rx_oos_max = 0;
+#endif
     assert(conn->rx_oos_ent_cnt == 0);
     conn->rx_last = rx_last;
     timing_reset(&conn->pp_lat);
