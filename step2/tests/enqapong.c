@@ -459,6 +459,7 @@ static int do_server_pong(struct stuff *conn)
     uint64_t            warmup_count;
     uint64_t            i;
     struct enqa_msg     msg;
+    uint32_t            rx_seq;
 
     zhpeq_print_xq_info(conn->zxq);
 
@@ -478,13 +479,15 @@ static int do_server_pong(struct stuff *conn)
 
     /* Receive all the pending entries. */
     conn_rx_stats_reset(conn, 0);
+    rx_seq = conn->rx_seq;
     for (i = 0; i < conn->qlen; i++) {
         ret = conn_rx_msg(conn, &msg, false);
         if (ret < 0)
             goto done;
         if (!ret)
             continue;
-        assert(be32toh(msg.seq) == i);
+        assert(be32toh(msg.seq) == i + rx_seq);
+        assert(conn->rx_seq == i + rx_seq);
     }
 
     conn_stats_print(conn);
