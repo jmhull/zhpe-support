@@ -245,8 +245,7 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start, uint8_t flag)
     return ret;
 }
 
-static ssize_t conn_tx_completions(struct stuff *conn, bool qfull_ok,
-                                   bool qd_check)
+static int conn_tx_completions(struct stuff *conn, bool qfull_ok, bool qd_check)
 {
     ssize_t             ret = 0;
     struct zhpeq_xq     *zxq = conn->zxq;
@@ -298,6 +297,9 @@ static ssize_t conn_tx_completions(struct stuff *conn, bool qfull_ok,
     return ret;
 }
 
+#define _conn_tx_completions(...)                               \
+    zhpeu_call_neg(zhpeu_err, conn_tx_completions,  int, __VA_ARGS__)
+
 static ssize_t conn_tx_completions_wait(struct stuff *conn, bool qfull_ok,
                                        bool qd_check)
 {
@@ -308,6 +310,9 @@ static ssize_t conn_tx_completions_wait(struct stuff *conn, bool qfull_ok,
 
     return ret;
 }
+
+#define _conn_tx_completions_wait(...)                          \
+    zhpeu_call_neg(zhpeu_err, conn_tx_completions_wait, int,  __VA_ARGS__)
 
 static int conn_rx_oos_insert(struct stuff *conn, struct zhpe_rdm_entry *rqe,
                               uint32_t oos)
@@ -557,14 +562,14 @@ static int do_server_pong(struct stuff *conn)
                 break;
             if (ret != -EAGAIN)
                 goto done;
-            ret = conn_tx_completions(conn, false, false);
+            ret = _conn_tx_completions(conn, false, false);
             if (ret < 0)
                 goto done;
         }
     }
 
     /* Wait for all transmits to complete. */
-    ret = conn_tx_completions_wait(conn, false, false);
+    ret = _conn_tx_completions_wait(conn, false, false);
     if (ret < 0)
         goto done;
 
@@ -618,21 +623,16 @@ static int do_client_pong(struct stuff *conn)
         ret = conn_tx_msg(conn, 0, 0);
         if (ret < 0)
             goto done;
-        ret = conn_tx_completions_wait(conn, false, true);
+        ret = _conn_tx_completions_wait(conn, false, true);
         if (ret < 0)
             goto done;
     }
     ret = conn_tx_msg(conn, 0, 0);
     if (ret < 0)
         goto done;
-    for (;;) {
-        ret = conn_tx_completions(conn, true, true);
-        if (!ret)
-            continue;
-        assert(ret == -EIO);
+    ret = _conn_tx_completions_wait(conn, true, true);
+    assert(ret == -EIO);
 
-        break;
-    }
     conn_stats_print(conn);
 
     ret = _zhpeu_sock_send_blob(conn->sock_fd, NULL, 0);
@@ -654,7 +654,7 @@ static int do_client_pong(struct stuff *conn)
         ret = conn_tx_msg(conn, 0, 0);
         if (ret < 0)
             goto done;
-        ret = conn_tx_completions_wait(conn, false, false);
+        ret = _conn_tx_completions_wait(conn, false, false);
         if (ret < 0)
             goto done;
         while (get_cycles(NULL) - start < conn->poll_cycles * 2)
@@ -705,7 +705,7 @@ static int do_client_pong(struct stuff *conn)
                           get_cycles(NULL) - be64toh(msg.pp_start));
         }
 
-        ret = conn_tx_completions(conn, false, false);
+        ret = _conn_tx_completions(conn, false, false);
         if (ret < 0)
             goto done;
 
