@@ -630,8 +630,10 @@ static int do_client_pong(struct stuff *conn)
     ret = conn_tx_msg(conn, 0, 0);
     if (ret < 0)
         goto done;
-    ret = _conn_tx_completions_wait(conn, true, true);
+    ret = conn_tx_completions_wait(conn, true, true);
     assert(ret == -EIO);
+    /* We need to adjust conn->tx_seq to account for the lost I/O. */
+    conn->tx_seq--;
 
     conn_stats_print(conn);
 
