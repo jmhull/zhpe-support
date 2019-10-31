@@ -355,16 +355,38 @@ static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
     return ret;
 }
 
+struct rx_log {
+    int line;
+    uint32_t head;
+    uint64_t v[3];
+};
+
+struct rx_log rx_log[1024];
+
+uint32_t rx_log_idx;
+
+void do_rx_log(uint line, uint32_t head, uint64_t v0, uint64_t v1, uint64_t v2)
+{
+    uint32_t i = rx_log_idx++;
+
+    rx_log[i].line = line;
+    rx_log[i].head = head;
+    rx_log[i].v[0] = v0;
+    rx_log[i].v[1] = v1;
+    rx_log[i].v[2] = v2;
+}
+
 static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
                        bool sleep_ok)
 {
     int                 ret = 0;
     struct zhpeq_rq     *zrq = conn->zrq;
-    struct zhpe_rdm_entry *rqe;
+    struct zhpe_rdm_entry *rqe = NULL; /* ! */
     struct enqa_msg     *msg;
     uint64_t            now;
     uint32_t            oos;
 
+    do_rx_log(__LINE__, zrq->head, 0, 0, 0);
     for (;;) {
         if (unlikely(conn->epoll)) {
             ret = zhpeq_rq_epoll((sleep_ok ? -1 : 0), NULL, false,
@@ -417,6 +439,7 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
             break;
         }
     }
+    do_rx_log(__LINE__, zrq->head, ret, (uintptr_t)rqe, 0);
 
     return ret;
 }
