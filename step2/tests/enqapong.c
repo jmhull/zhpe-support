@@ -365,7 +365,7 @@ static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
     uint32_t            off;
 
     do_rx_log(__LINE__, conn->zrq->head, conn->rx_seq,
-              ((struct enqa_msg *)rqe)->seq, 0);
+              be32toh(((struct enqa_msg *)rqe)->seq), 0);
     /* Assume 0, 3, 2, 1, 4, ...  */
     if (!conn->rx_oos_ent_cnt) {
         conn->rx_oos_ent_base = conn->rx_seq;
@@ -392,8 +392,6 @@ static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
     } else
         ret = conn_rx_oos_insert(conn, rqe, oos);
  done:
-    do_rx_log(__LINE__, ret, conn->zrq->head,
-              (ret > 0 ? msg_out->seq : ~(uint64_t)0), 0);
 
     return ret;
 }
@@ -475,7 +473,7 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
         }
     }
     if (ret > 0)
-        do_rx_log(__LINE__, zrq->head, conn->rx_seq, be64toh(msg_out->seq), 0);
+        do_rx_log(__LINE__, zrq->head, conn->rx_seq, be32toh(msg_out->seq), 0);
 
     return ret;
 }
