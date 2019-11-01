@@ -364,11 +364,11 @@ static int conn_rx_oos_insert(struct stuff *conn, struct zhpe_rdm_entry *rqe,
 static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
                        uint32_t oos, struct zhpe_rdm_entry *rqe)
 {
+    struct enqa_msg     *msg = (void *)rqe->payload;
     int                 ret;
     uint32_t            off;
 
-    do_rx_log(__LINE__, conn->zrq, conn->rx_seq,
-              be32toh(((struct enqa_msg *)rqe)->seq), 0);
+    do_rx_log(__LINE__, conn->zrq, conn->rx_seq, be32toh(msg->seq), 0);
     /* Assume 0, 3, 2, 1, 4, ...  */
     if (!conn->rx_oos_ent_cnt) {
         conn->rx_oos_ent_base = conn->rx_seq;
@@ -388,7 +388,8 @@ static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
     }
     if (conn->rx_oos_ent[off].hdr.valid) {
         conn->rx_oos_ent_cnt--;
-        *msg_out = *(struct enqa_msg *)conn->rx_oos_ent[off].payload;
+        msg = (void *)conn->rx_oos_ent[off].payload;
+        *msg_out = *msg;
         conn->rx_oos_ent[off].hdr.valid = 0;
         ret = 1;
         conn->rx_seq++;
