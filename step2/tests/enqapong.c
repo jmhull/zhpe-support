@@ -318,6 +318,7 @@ static ssize_t conn_tx_completions_wait(struct stuff *conn, bool qfull_ok,
 struct rx_log {
     int line;
     uint32_t head;
+    uint32_t head_commit;
     uint64_t v[3];
 };
 
@@ -325,12 +326,14 @@ struct rx_log rx_log[4096];
 
 uint32_t rx_log_idx;
 
-void do_rx_log(uint line, uint32_t head, uint64_t v0, uint64_t v1, uint64_t v2)
+void do_rx_log(uint line, struct zhpeq_rq *zrq,
+               uint64_t v0, uint64_t v1, uint64_t v2)
 {
     uint32_t i = rx_log_idx++ & (ARRAY_SIZE(rx_log) - 1);
 
     rx_log[i].line = line;
-    rx_log[i].head = head;
+    rx_log[i].head = zrq->head;
+    rx_log[i].head_commit = zrq->head_commit;
     rx_log[i].v[0] = v0;
     rx_log[i].v[1] = v1;
     rx_log[i].v[2] = v2;
@@ -364,7 +367,7 @@ static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
     int                 ret;
     uint32_t            off;
 
-    do_rx_log(__LINE__, conn->zrq->head, conn->rx_seq,
+    do_rx_log(__LINE__, conn->zrq, conn->rx_seq,
               be32toh(((struct enqa_msg *)rqe)->seq), 0);
     /* Assume 0, 3, 2, 1, 4, ...  */
     if (!conn->rx_oos_ent_cnt) {
@@ -402,7 +405,7 @@ static inline void do_rq_head_update(struct zhpeq_rq *zrq, bool zero,
     uint32_t            threshold = (zero ? 0 : zrq->rqinfo.cmplq.ent / 4);
 
     if (unlikely(zrq->head - zrq->head_commit > threshold)) {
-        do_rx_log(line, zrq->head, zrq->head_commit, 0, 0);
+        do_rx_log(line, zrq, 0, 0, 0);
         __zhpeq_rq_head_update(zrq);
     }
 }
@@ -473,7 +476,7 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
         }
     }
     if (ret > 0)
-        do_rx_log(__LINE__, zrq->head, conn->rx_seq, be32toh(msg_out->seq), 0);
+        do_rx_log(__LINE__, zrq, conn->rx_seq, be32toh(msg_out->seq), 0);
 
     return ret;
 }
