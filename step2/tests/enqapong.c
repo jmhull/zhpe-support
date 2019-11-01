@@ -502,6 +502,8 @@ static int do_server_pong(struct stuff *conn)
     }
 
     conn_stats_print(conn);
+    /* We need to adjust conn->rx_seq to account for the lost I/O. */
+    conn->rx_seq++;
 
     /* Second, an epoll test. Server rate limits to force epoll. */
     ret = _zhpeu_sock_send_blob(conn->sock_fd, NULL, 0);
@@ -634,8 +636,6 @@ static int do_client_pong(struct stuff *conn)
         goto done;
     ret = conn_tx_completions_wait(conn, true, true);
     assert(ret == -EIO);
-    /* We need to adjust conn->tx_seq to account for the lost I/O. */
-    conn->tx_seq--;
 
     conn_stats_print(conn);
 
