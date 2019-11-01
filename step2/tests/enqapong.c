@@ -189,7 +189,7 @@ static void conn_stats_print(struct stuff *conn)
     timing_print(&conn->tx_lat, "tx_lat", 1);
     timing_print(&conn->tx_cmp, "tx_cmp", 1);
     timing_print(&conn->rx_lat, "rx_lat", 1);
-    zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max %lu/%d rx_oos/max %lu/%d"
+    zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max %lu/%u rx_oos/max %lu/%u"
                      " epoll %lu\n",
                      zhpeu_appname, conn->tx_seq, conn->rx_seq,
                      conn->tx_oos, conn->tx_oos_max,
@@ -268,6 +268,7 @@ static int conn_tx_completions(struct stuff *conn, bool qfull_ok, bool qd_check)
         msg = zxq_comp[i].z.context;
         timing_update(&conn->tx_cmp, get_cycles(NULL) - be64toh(msg->tx_start));
         oos = be32toh(msg->seq) - conn->cq_seq;
+        assert((int32_t)oos >= 0);
         if (likely(!oos))
             conn->cq_seq++;
         else {
