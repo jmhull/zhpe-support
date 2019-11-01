@@ -475,7 +475,7 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
         }
     }
     if (ret > 0)
-        do_rx_log(__LINE__, zrq->head, msg_out->seq, 0, 0);
+        do_rx_log(__LINE__, zrq->head, conn->rx_seq, be64toh(msg_out->seq), 0);
 
     return ret;
 }
