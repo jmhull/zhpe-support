@@ -332,8 +332,13 @@ void do_rx_log(uint line, struct zhpeq_rq *zrq,
     uint32_t i = rx_log_idx++ & (ARRAY_SIZE(rx_log) - 1);
 
     rx_log[i].line = line;
-    rx_log[i].head = zrq->head;
-    rx_log[i].head_commit = zrq->head_commit;
+    if (zrq) {
+        rx_log[i].head = zrq->head;
+        rx_log[i].head_commit = zrq->head_commit;
+    } else {
+        rx_log[i].head = 0;
+        rx_log[i].head_commit = 0;
+    }
     rx_log[i].v[0] = v0;
     rx_log[i].v[1] = v1;
     rx_log[i].v[2] = v2;
@@ -772,6 +777,7 @@ static int do_client_pong(struct stuff *conn)
                 }
                 goto done;
             }
+            do_rx_log(__LINE__, NULL, conn->tx_seq, tx_count, rx_count);
         }
     }
 
