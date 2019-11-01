@@ -421,7 +421,6 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
     uint64_t            now;
     uint32_t            oos;
 
-    do_rx_log(__LINE__, zrq->head, 0, 0, 0);
     for (;;) {
         if (unlikely(conn->epoll)) {
             ret = zhpeq_rq_epoll((sleep_ok ? -1 : 0), NULL, false,
@@ -475,7 +474,8 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
             break;
         }
     }
-    do_rx_log(__LINE__, zrq->head, ret, (uintptr_t)rqe, 0);
+    if (ret > 0)
+        do_rx_log(__LINE__, zrq->head, msg_out->seq, 0, 0);
 
     return ret;
 }
