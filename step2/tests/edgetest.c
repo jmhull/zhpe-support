@@ -225,9 +225,9 @@ static int zxq_completions(struct zhpeq_xq *zxq)
         if (unlikely(cqe->status != ZHPEQ_XQ_CQ_STATUS_SUCCESS)) {
             cqe_copy = *cqe;
             zhpeq_xq_cq_entry_done(zxq, cqe);
+            ret = -EIO;
             print_err("%s,%u:index 0x%x status 0x%x\n", __func__, __LINE__,
                       cqe_copy.index, cqe_copy.status);
-            ret = -EIO;
             break;
         }
         ctxt = zhpeq_xq_cq_context(zxq, cqe);
