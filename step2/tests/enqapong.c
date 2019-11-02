@@ -269,6 +269,7 @@ static int conn_tx_completions(struct stuff *conn, bool qfull_ok, bool qd_check)
     struct zhpe_cq_entry cqe_copy;
 
     while ((cqe = zhpeq_xq_cq_entry(zxq))) {
+        conn->tx_avail++;
         msg = zhpeq_xq_cq_context(zxq, cqe);
         /* unlikely() to optimize the no-error case. */
         if (unlikely(cqe->status != ZHPEQ_XQ_CQ_STATUS_SUCCESS)) {
@@ -299,7 +300,6 @@ static int conn_tx_completions(struct stuff *conn, bool qfull_ok, bool qd_check)
             conn->tx_oos++;
             conn->tx_oos_max = max(conn->tx_oos_max, oos);
         }
-        conn->tx_avail++;
     }
  done:
 
