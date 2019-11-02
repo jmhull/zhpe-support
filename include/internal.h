@@ -125,7 +125,6 @@ struct zhpeq_domi {
 struct zhpeq_xqi {
     struct zhpeq_xq     zxq;
     void                *backend_data;
-    uint64_t            *free_bitmap;
     int                 dev_fd;
 };
 

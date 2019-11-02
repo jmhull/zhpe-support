@@ -397,7 +397,7 @@ int zhpeq_xq_free(struct zhpeq_xq *zxq)
     /* Free queue memory. */
     free(zxq->ctx);
     free(zxq->mem);
-    free(xqi->free_bitmap);
+    free(zxq->free_bitmap);
     free(xqi);
 
  done:
@@ -472,14 +472,14 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
     for (i = 0; i < e; i++)
         zxq->mem[i].hdr.cmp_index = i;
     e = (e >> ZHPEQ_BITMAP_SHIFT) + 1;
-    xqi->free_bitmap = calloc_cachealigned(e, sizeof(*xqi->free_bitmap));
-    if (!xqi->free_bitmap)
+    zxq->free_bitmap = calloc_cachealigned(e, sizeof(*zxq->free_bitmap));
+    if (!zxq->free_bitmap)
         goto done;
 
     /* Initial free_bitmap. */
     for (i = 0; i < e; i++)
-        xqi->free_bitmap[i] = ~(uint64_t)0;
-    xqi->free_bitmap[e - 1] &= ~((uint64_t)1 << (ZHPEQ_BITMAP_BITS - 1));
+        zxq->free_bitmap[i] = ~(uint64_t)0;
+    zxq->free_bitmap[e - 1] &= ~((uint64_t)1 << (ZHPEQ_BITMAP_BITS - 1));
 
     /* xqi->dev_fd == -1 means we're faking things out. */
     flags = (xqi->dev_fd == -1 ? MAP_ANONYMOUS | MAP_PRIVATE : MAP_SHARED);
@@ -561,7 +561,6 @@ int zhpeq_xq_backend_close(struct zhpeq_xq *zxq, int open_idx)
 int32_t zhpeq_xq_reserve(struct zhpeq_xq *zxq)
 {
     int32_t             ret;
-    struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, zxq);
     uint                i;
 
     if (unlikely(!zxq)) {
@@ -569,19 +568,19 @@ int32_t zhpeq_xq_reserve(struct zhpeq_xq *zxq)
         goto done;
     }
 
-    ret = ffs64(xqi->free_bitmap[0]);
+    ret = ffs64(zxq->free_bitmap[0]);
     if (likely(ret)) {
         ret--;
-        xqi->free_bitmap[0] &= ~((uint64_t)1 << ret);
+        zxq->free_bitmap[0] &= ~((uint64_t)1 << ret);
         /* INS_CMD == 0 */
         if (unlikely(ret >= ZHPE_XDM_QCM_CMD_BUF_COUNT))
             ret |= (INS_MEM << 16);
     } else {
         for (i = 1; i < (zxq->xqinfo.cmdq.ent >> ZHPEQ_BITMAP_SHIFT); i++) {
-            ret = ffs64(xqi->free_bitmap[i]);
+            ret = ffs64(zxq->free_bitmap[i]);
             if (ret) {
                 ret--;
-                xqi->free_bitmap[i] &= ~((uint64_t)1 << ret);
+                zxq->free_bitmap[i] &= ~((uint64_t)1 << ret);
                 ret += (i << ZHPEQ_BITMAP_SHIFT);
                 ret |= (INS_MEM << 16);
                 goto done;
@@ -604,16 +603,6 @@ void zhpeq_xq_commit(struct zhpeq_xq *zxq)
         qcmwrite64(zxq->wq_tail_commit & qmask,
                    zxq->qcm, ZHPE_XDM_QCM_CMD_QUEUE_TAIL_OFFSET);
     }
-}
-
-static void *get_context(struct zhpeq_xqi *xqi, struct zhpe_cq_entry *cqe)
-{
-    void                *ret = xqi->zxq.ctx[cqe->index];
-
-    xqi->free_bitmap[cqe->index >> ZHPEQ_BITMAP_SHIFT] |=
-        ((uint64_t)1 << (cqe->index & (ZHPEQ_BITMAP_BITS - 1)));
-
-    return ret;
 }
 
 static void set_atomic_operands(union zhpe_hw_wq_entry *wqe,
@@ -671,41 +660,6 @@ void zhpeq_xq_atomic(struct zhpeq_xq *zxq, int32_t reservation,
     default:
         abort();
     }
-}
-
-ssize_t zhpeq_xq_cq_read(struct zhpeq_xq *zxq,
-                         struct zhpeq_xq_cq_entry *entries, size_t n_entries)
-{
-    ssize_t             ret;
-    struct zhpeq_xqi    *xqi = container_of(zxq, struct zhpeq_xqi, zxq);
-    volatile union zhpe_hw_cq_entry *cqe;
-    ssize_t             i;
-    uint32_t            qmask;
-
-    if (unlikely(!zxq) || unlikely(!entries) ||
-        unlikely(n_entries > SSIZE_MAX)) {
-        ret = -EINVAL;
-        goto done;
-    }
-
-    qmask = zxq->xqinfo.cmplq.ent - 1;
-
-    for (i = 0; i < n_entries; i++) {
-        cqe = zxq->cq + (zxq->cq_head & qmask);
-        /* May not actually be unlikely, but we want to optimize success. */
-        if (unlikely(!zhpeq_cmp_valid(cqe, zxq->cq_head, qmask)))
-            break;
-        entries[i].z = cqe->entry;
-        entries[i].z.context = get_context(xqi, &entries[i].z);
-        entries[i].z.cqe = (void *)cqe;
-        zhpe_stats_stamp(zhpe_stats_subid(ZHPQ, 80), (uintptr_t)zxq,
-                         entries[i].z.index, (uintptr_t)entries[i].z.context);
-        zxq->cq_head++;
-    }
-    ret = i;
-
- done:
-    return ret;
 }
 
 int zhpeq_rq_free(struct zhpeq_rq *zrq)

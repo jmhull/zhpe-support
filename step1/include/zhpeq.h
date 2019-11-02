@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2017-2019 Hewlett Packard Enterprise Development LP.
  * All rights reserved.
- *
+5B *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
  * General Public License (GPL) Version 2, available from the file
@@ -147,10 +147,6 @@ struct zhpeq_key_data {
     };
 };
 
-struct zhpeq_xq_cq_entry {
-    struct zhpe_cq_entry z;
-};
-
 /* Public portions of structures. */
 struct zhpeq_mmap_desc {
     struct zhpeq_key_data *qkdata;
@@ -168,10 +164,11 @@ struct zhpeq_dom {
 struct zhpeq_xq {
     struct zhpeq_dom    *zdom;
     struct zhpe_xqinfo  xqinfo;
-    volatile void       *qcm;
+    void                *qcm;
     union zhpe_hw_wq_entry *cmd;
     union zhpe_hw_wq_entry *wq;
-    volatile union zhpe_hw_cq_entry *cq;
+    union zhpe_hw_cq_entry *cq;
+    uint64_t            *free_bitmap;
     void                **ctx;
     union zhpe_hw_wq_entry *mem;
     uint32_t            wq_tail;
@@ -391,6 +388,14 @@ void zhpeq_xq_atomic(struct zhpeq_xq *zxq, int32_t reservation,
                      enum zhpeq_atomic_op op, uint64_t rem_addr,
                      const uint64_t *operands);
 
+int zhpeq_xq_restart(struct zhpeq_xq *zxq);
+
+static inline void *zhpeq_q_entry(void *entries, uint32_t qindex,
+                                  uint32_t qmask)
+{
+    return VPTR(entries, ZHPE_HW_ENTRY_LEN * (qindex & qmask));
+}
+
 static inline bool zhpeq_cmp_valid(volatile void *qent, uint32_t qindex,
                                    uint32_t qmask)
 {
@@ -400,21 +405,43 @@ static inline bool zhpeq_cmp_valid(volatile void *qent, uint32_t qindex,
     return ((valid ^ (qindex >> shift)) & ZHPE_CMP_ENT_VALID_MASK);
 }
 
-int zhpeq_xq_restart(struct zhpeq_xq *zxq);
+static inline struct zhpe_cq_entry *zhpeq_xq_cq_entry(struct zhpeq_xq *zxq)
+{
+    uint32_t            qmask = zxq->xqinfo.cmplq.ent - 1;
+    uint32_t            qindex = zxq->cq_head;
+    struct zhpe_cq_entry *cqe = zhpeq_q_entry(zxq->cq, qindex, qmask);
 
-ssize_t zhpeq_xq_cq_read(struct zhpeq_xq *zxq,
-                         struct zhpeq_xq_cq_entry *entries, size_t n_entries);
+    /* likely() to optimize the success case. */
+    if (likely(zhpeq_cmp_valid(cqe, qindex, qmask))) {
+        return cqe;
+    }
+
+    return NULL;
+}
+
+static inline void *zhpeq_xq_cq_context(struct zhpeq_xq *zxq,
+                                        struct zhpe_cq_entry *cqe)
+{
+    return zxq->ctx[cqe->index];
+}
+
+static inline void zhpeq_xq_cq_entry_done(struct zhpeq_xq *zxq,
+                                          struct zhpe_cq_entry *cqe)
+{
+    /*
+     * Simple rule: do not access the cqe or the backup copy of the
+     * XDM command after this call.
+     */
+    barrier();
+    zxq->free_bitmap[cqe->index >> ZHPEQ_BITMAP_SHIFT] |=
+        ((uint64_t)1 << (cqe->index & (ZHPEQ_BITMAP_BITS - 1)));
+    zxq->cq_head++;
+}
 
 int zhpeq_rq_free(struct zhpeq_rq *zrq);
 
 int zhpeq_rq_alloc(struct zhpeq_dom *zdom, int rx_qlen, int slice_mask,
                    struct zhpeq_rq **zrq_out);
-
-static inline void *zhpeq_q_entry(void *entries, uint32_t qindex,
-                                  uint32_t qmask)
-{
-    return VPTR(entries, ZHPE_HW_ENTRY_LEN * (qindex & qmask));
-}
 
 void __zhpeq_rq_head_update(struct zhpeq_rq *zrq);
 
@@ -426,7 +453,7 @@ static inline void zhpeq_rq_head_update(struct zhpeq_rq *zrq, bool zero)
         __zhpeq_rq_head_update(zrq);
 }
 
-static inline struct zhpe_rdm_entry *zhpeq_rq_entry_valid(struct zhpeq_rq *zrq)
+static inline struct zhpe_rdm_entry *zhpeq_rq_entry(struct zhpeq_rq *zrq)
 {
     uint32_t            qmask = zrq->rqinfo.cmplq.ent - 1;
     uint32_t            qindex = zrq->head;
@@ -440,9 +467,12 @@ static inline struct zhpe_rdm_entry *zhpeq_rq_entry_valid(struct zhpeq_rq *zrq)
     return NULL;
 }
 
-static inline void zhpeq_rq_entry_done(struct zhpeq_rq *zrq, uint32_t nentries)
+static inline void zhpeq_rq_entry_done(struct zhpeq_rq *zrq,
+                                       struct zhpe_rdm_entry *rqe)
 {
-    zrq->head += nentries;
+    /* Simple rule: do not access the rqe after this call. */
+    barrier();
+    zrq->head++;
 }
 
 int zhpeq_rq_wait_check(struct zhpeq_rq *zrq, uint64_t poll_cycles);

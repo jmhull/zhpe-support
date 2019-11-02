@@ -92,9 +92,9 @@ struct stuff {
     int                 sock_fd;
     size_t              ring_ops;
     size_t              ring_warmup;
+    uint32_t            msg_tx_seq;
+    uint32_t            msg_rx_seq;
     uint32_t            tx_seq;
-    uint32_t            cq_seq;
-    uint32_t            rx_seq;
     uint32_t            tx_oos_max;
     uint32_t            rx_oos_max;
     uint32_t            rx_oos_ent_base;
@@ -102,6 +102,7 @@ struct stuff {
     struct zhpe_rdm_entry rx_oos_ent[64] CACHE_ALIGNED;
     size_t              tx_oos;
     size_t              rx_oos;
+    size_t              tx_retry;
     size_t              epoll_cnt;
     uint64_t            poll_cycles;
     struct timing       tx_lat;
@@ -125,7 +126,8 @@ struct stuff {
 struct enqa_msg {
     uint64_t            tx_start;
     uint64_t            pp_start;
-    uint32_t            seq;
+    uint32_t            msg_seq;
+    uint32_t            tx_seq;
     uint8_t             flag;
 };
 
@@ -149,22 +151,11 @@ static void conn_tx_stats_reset(struct stuff *conn)
 {
     timing_reset(&conn->tx_lat);
     timing_reset(&conn->tx_cmp);
-#if 0
-    conn->tx_seq = 0;
-    conn->cq_seq = 0;
-    conn->tx_oos = 0;
-    conn->tx_oos_max = 0;
-#endif
 }
 
 static void conn_rx_stats_reset(struct stuff *conn, uint64_t rx_last)
 {
     timing_reset(&conn->rx_lat);
-#if 0
-    conn->rx_seq = 0;
-    conn->rx_oos = 0;
-    conn->rx_oos_max = 0;
-#endif
     assert(conn->rx_oos_ent_cnt == 0);
     conn->rx_last = rx_last;
     timing_reset(&conn->pp_lat);
@@ -189,10 +180,10 @@ static void conn_stats_print(struct stuff *conn)
     timing_print(&conn->tx_lat, "tx_lat", 1);
     timing_print(&conn->tx_cmp, "tx_cmp", 1);
     timing_print(&conn->rx_lat, "rx_lat", 1);
-    zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max %lu/%u rx_oos/max %lu/%u"
-                     " epoll %lu\n",
-                     zhpeu_appname, conn->tx_seq, conn->rx_seq,
-                     conn->tx_oos, conn->tx_oos_max,
+    zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max/retry %lu/%u/%lu"
+                     " rx_oos/max %lu/%u epoll %lu\n",
+                     zhpeu_appname, conn->zxq->wq_tail, conn->zrq->head,
+                     conn->tx_oos, conn->tx_oos_max, conn->tx_retry,
                      conn->rx_oos, conn->rx_oos_max, conn->epoll_cnt);
 }
 
@@ -214,7 +205,8 @@ static void stuff_free(struct stuff *stuff)
         free(stuff);
 }
 
-static int conn_tx_msg(struct stuff *conn, uint64_t pp_start, uint8_t flag)
+static int conn_tx_msg(struct stuff *conn, uint64_t pp_start,
+                       uint32_t msg_seq, uint8_t flag)
 {
     int32_t             ret;
     struct zhpeq_xq     *zxq = conn->zxq;
@@ -234,7 +226,8 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start, uint8_t flag)
     if (!pp_start)
         pp_start = msg->tx_start;
     msg->pp_start = pp_start;
-    msg->seq = htobe32(conn->tx_seq++);
+    msg->msg_seq = htobe32(msg_seq);
+    msg->tx_seq = htobe32(conn->tx_seq++);
     msg->flag = flag;
     zhpeq_xq_insert(zxq, ret, false);
     zhpeq_xq_commit(zxq);
@@ -245,53 +238,68 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start, uint8_t flag)
     return ret;
 }
 
+#define _conn_tx_msg(...)                                       \
+    zhpeu_call_neg(zhpeu_err, conn_tx_msg,  int, __VA_ARGS__)
+
+static int conn_tx_msg_retry(struct stuff *conn, uint64_t pp_start,
+                             uint32_t msg_seq, uint8_t flag)
+{
+    int                 ret;
+
+    for (;;) {
+        ret = conn_tx_msg(conn, pp_start, msg_seq, flag);
+        if (ret >= 0 || ret != -EAGAIN)
+            break;
+    }
+
+    return ret;
+}
+
+#define _conn_tx_msg_retry(...)                                 \
+    zhpeu_call_neg(zhpeu_err, conn_tx_msg_retry,  int, __VA_ARGS__)
+
 static int conn_tx_completions(struct stuff *conn, bool qfull_ok, bool qd_check)
 {
     ssize_t             ret = 0;
     struct zhpeq_xq     *zxq = conn->zxq;
-    uint                i;
-    uint                nentries;
     struct enqa_msg     *msg;
+    struct enqa_msg     msg_copy;
     uint32_t            oos;
-    struct zhpeq_xq_cq_entry zxq_comp[64];
+    struct zhpe_cq_entry *cqe;
+    struct zhpe_cq_entry cqe_copy;
 
-    ret = zhpeq_xq_cq_read(zxq, zxq_comp, ARRAY_SIZE(zxq_comp));
-    if (ret < 0) {
-        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_xq_cq_read", "", ret);
-        goto done;
-    }
-    if (!ret)
-        goto done;;
-    nentries = ret;
-    ret = 0;
-    for (i = 0; i < nentries; i++) {
-        msg = zxq_comp[i].z.context;
+    while ((cqe = zhpeq_xq_cq_entry(zxq))) {
+        msg = zhpeq_xq_cq_context(zxq, cqe);
+        /* unlikely() to optimize the no-error case. */
+        if (unlikely(cqe->status != ZHPEQ_XQ_CQ_STATUS_SUCCESS)) {
+            cqe_copy = *cqe;
+            msg_copy = *msg;
+            zhpeq_xq_cq_entry_done(zxq, cqe);
+            if (cqe_copy.status != ZHPE_HW_CQ_STATUS_GENZ_RDM_QUEUE_FULL) {
+                zhpeu_print_err("%s,%u:cqe %p ctx %p index 0x%x status 0x%x\n",
+                                __func__, __LINE__, cqe, msg,
+                                cqe_copy.index, cqe_copy.status);
+                ret = -EIO;
+            } else if (!qfull_ok) {
+                /*
+                 * Retry: given that we're single threaded and we just
+                 * freed a tx slot, EAGAIN should not be possible.
+                 */
+                conn->tx_retry++;
+                ret = _conn_tx_msg(conn, msg_copy.pp_start, msg_copy.msg_seq,
+                                   msg_copy.flag);
+            }
+            goto done;
+        }
         timing_update(&conn->tx_cmp, get_cycles(NULL) - be64toh(msg->tx_start));
-        oos = be32toh(msg->seq) - conn->cq_seq;
+        oos = be32toh(msg->tx_seq) - zxq->cq_head;
+        zhpeq_xq_cq_entry_done(zxq, cqe);
         assert((int32_t)oos >= 0);
-        if (likely(!oos))
-            conn->cq_seq++;
-        else {
+        if (unlikely(!oos)) {
             conn->tx_oos++;
             conn->tx_oos_max = max(conn->tx_oos_max, oos);
         }
         conn->tx_avail++;
-        if (zxq_comp[i].z.status != ZHPEQ_XQ_CQ_STATUS_SUCCESS) {
-            if (!qfull_ok ||
-                zxq_comp[i].z.status != ZHPE_HW_CQ_STATUS_GENZ_RDM_QUEUE_FULL)
-                zhpeu_print_err("%s,%u:cqe %p ctx %p index 0x%x status 0x%x\n",
-                                __func__, __LINE__,
-                                zxq_comp[i].z.cqe, zxq_comp[i].z.context,
-                                zxq_comp[i].z.index, zxq_comp[i].z.status);
-            ret = -EIO;
-        }
-        if (qd_check && zxq_comp[i].z.qd != conn->qd_last) {
-            zhpeu_print_info("%s,%u:cqe %p ctx %p index 0x%x qd 0x%x\n",
-                             __func__, __LINE__,
-                             zxq_comp[i].z.cqe, zxq_comp[i].z.context,
-                             zxq_comp[i].z.index, zxq_comp[i].z.qd);
-            conn->qd_last = zxq_comp[i].z.qd;
-        }
     }
  done:
 
@@ -348,7 +356,7 @@ static int conn_rx_oos_insert(struct stuff *conn, struct zhpe_rdm_entry *rqe,
                               uint32_t oos)
 {
     int                 ret = 0;
-    uint32_t            off = oos + (conn->rx_seq - conn->rx_oos_ent_base);
+    uint32_t            off = oos + (conn->msg_rx_seq - conn->rx_oos_ent_base);
 
     if (off >= ARRAY_SIZE(conn->rx_oos_ent)) {
         ret = -EOVERFLOW;
@@ -360,8 +368,8 @@ static int conn_rx_oos_insert(struct stuff *conn, struct zhpe_rdm_entry *rqe,
     conn->rx_oos_ent[off] = *rqe;
     conn->rx_oos_ent[off].hdr.valid = 1;
     /* Advance the queue head, but not conn->rx_seq. */
-    zhpeq_rq_entry_done(conn->zrq, 1);
-    zhpeq_rq_head_update(conn->zrq, true);
+    zhpeq_rq_entry_done(conn->zrq, rqe);
+    zhpeq_rq_head_update(conn->zrq, false);
  done:
     return ret;
 }
@@ -373,10 +381,10 @@ static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
     int                 ret;
     uint32_t            off;
 
-    do_rx_log(__LINE__, conn->zrq, conn->rx_seq, be32toh(msg->seq), 0);
+    do_rx_log(__LINE__, conn->zrq, conn->msg_rx_seq, be32toh(msg->msg_seq), 0);
     /* Assume 0, 3, 2, 1, 4, ...  */
     if (!conn->rx_oos_ent_cnt) {
-        conn->rx_oos_ent_base = conn->rx_seq;
+        conn->rx_oos_ent_base = conn->msg_rx_seq;
         ret = conn_rx_oos_insert(conn, rqe, oos);
         goto done;
     }
@@ -386,7 +394,7 @@ static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
      *
      * If there is no saved entry, then we save the new entry.
      */
-    off = conn->rx_seq - conn->rx_oos_ent_base;
+    off = conn->msg_rx_seq - conn->rx_oos_ent_base;
     if (off >= ARRAY_SIZE(conn->rx_oos_ent)) {
         ret = -EIO;
         goto done;
@@ -397,26 +405,13 @@ static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
         *msg_out = *msg;
         conn->rx_oos_ent[off].hdr.valid = 0;
         ret = 1;
-        conn->rx_seq++;
+        conn->msg_rx_seq++;
     } else
         ret = conn_rx_oos_insert(conn, rqe, oos);
  done:
 
     return ret;
 }
-
-static inline void do_rq_head_update(struct zhpeq_rq *zrq, bool zero,
-                                     uint line)
-{
-    uint32_t            threshold = (zero ? 0 : zrq->rqinfo.cmplq.ent / 4);
-
-    if (unlikely(zrq->head - zrq->head_commit > threshold)) {
-        do_rx_log(line, zrq, 0, 0, 0);
-        __zhpeq_rq_head_update(zrq);
-    }
-}
-#define zhpeq_rq_head_update(_zrq, _zero) \
-    do_rq_head_update(_zrq, _zero, __LINE__)
 
 static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
                        bool sleep_ok)
@@ -443,7 +438,7 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
             } else
                 break;
         }
-        if (likely(rqe = zhpeq_rq_entry_valid(zrq))) {
+        if ((rqe = zhpeq_rq_entry(zrq))) {
 
             now = get_cycles(NULL);
             if (conn->rx_last)
@@ -451,13 +446,12 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
             conn->rx_last = now;
 
             msg = (void *)rqe->payload;
-            oos = be32toh(msg->seq) - conn->rx_seq;
+            oos = be32toh(msg->msg_seq) - conn->msg_rx_seq;
             if (likely(!oos)) {
-                conn->rx_seq++;
                 *msg_out = *msg;
-                assert(!memcmp(msg_out, msg, sizeof(*msg)));
-                zhpeq_rq_entry_done(zrq, 1);
+                zhpeq_rq_entry_done(zrq, rqe);
                 zhpeq_rq_head_update(zrq, false);
+                conn->msg_rx_seq++;
                 ret = 1;
             } else
                 ret = conn_rx_oos(conn, msg_out, oos, rqe);
@@ -482,10 +476,14 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
         }
     }
     if (ret > 0)
-        do_rx_log(__LINE__, zrq, conn->rx_seq, be32toh(msg_out->seq), 0);
+        do_rx_log(__LINE__, zrq, conn->msg_rx_seq,
+                  be32toh(msg_out->msg_seq), 0);
 
     return ret;
 }
+
+#define _conn_rx_msg(...)                                       \
+    zhpeu_call_neg(zhpeu_err, conn_rx_msg,  int, __VA_ARGS__)
 
 static int do_server_pong(struct stuff *conn)
 {
@@ -495,7 +493,6 @@ static int do_server_pong(struct stuff *conn)
     uint64_t            warmup_count;
     uint64_t            i;
     struct enqa_msg     msg;
-    uint32_t            rx_seq MAYBE_UNUSED;
 
     zhpeq_print_xq_info(conn->zxq);
 
@@ -515,19 +512,15 @@ static int do_server_pong(struct stuff *conn)
 
     /* Receive all the pending entries. */
     conn_rx_stats_reset(conn, 0);
-    for (i = 0, rx_seq = conn->rx_seq; i < conn->rqlen; i++, rx_seq++) {
-        ret = conn_rx_msg(conn, &msg, false);
+    for (i = 0; i < conn->rqlen; i++) {
+        ret = _conn_rx_msg(conn, &msg, false);
         if (ret < 0)
             goto done;
         if (!ret)
             continue;
-        assert(be32toh(msg.seq) == rx_seq);
-        assert(conn->rx_seq == rx_seq + 1);
     }
 
     conn_stats_print(conn);
-    /* We need to adjust conn->rx_seq to account for the lost I/O. */
-    conn->rx_seq++;
 
     /* Second, an epoll test. Server rate limits to force epoll. */
     ret = _zhpeu_sock_send_blob(conn->sock_fd, NULL, 0);
@@ -536,13 +529,11 @@ static int do_server_pong(struct stuff *conn)
 
     /* Receive all pending entries. */
     conn_rx_stats_reset(conn, 0);
-    for (i = 0, rx_seq = conn->rx_seq; i < DEFAULT_EPOLL; i++, rx_seq++) {
-        ret = conn_rx_msg(conn, &msg, true);
+    for (i = 0; i < DEFAULT_EPOLL; i++) {
+        ret = _conn_rx_msg(conn, &msg, true);
         if (ret < 0)
             goto done;
         assert(ret == 1);
-        assert(be32toh(msg.seq) == rx_seq);
-        assert(conn->rx_seq == rx_seq + 1);
     }
 
     conn_stats_print(conn);
@@ -559,8 +550,7 @@ static int do_server_pong(struct stuff *conn)
     /* Server only sends as many times as it receives. */
     conn_tx_stats_reset(conn);
     conn_rx_stats_reset(conn, 0);
-    for (op_count = warmup_count = 0, rx_seq = conn->rx_seq;
-         tx_flag_in != TX_LAST; op_count++, rx_seq++) {
+    for (op_count = warmup_count = 0; tx_flag_in != TX_LAST; op_count++) {
         /*
          * Receive a packet, send a packet: we are guaranteed the messages are
          * in sequence; we send an immediate reply to so we don't have to
@@ -568,14 +558,12 @@ static int do_server_pong(struct stuff *conn)
          * to the client.
          */
         for (;;) {
-            ret = conn_rx_msg(conn, &msg, false);
-            if (ret > 0)
-                break;
+            ret = _conn_rx_msg(conn, &msg, false);
             if (unlikely(ret < 0))
                 goto done;
+            if (ret > 0)
+                break;
         }
-        assert(be32toh(msg.seq) == rx_seq);
-        assert(conn->rx_seq == rx_seq + 1);
         if (msg.flag != tx_flag_in) {
             if (tx_flag_in == TX_WARMUP) {
                 warmup_count = op_count;
@@ -584,16 +572,10 @@ static int do_server_pong(struct stuff *conn)
             }
             tx_flag_in = msg.flag;
         }
-        for (;;) {
-            ret = conn_tx_msg(conn, msg.pp_start, msg.flag);
-            if (ret >= 0)
-                break;
-            if (ret != -EAGAIN)
-                goto done;
-            ret = _conn_tx_completions(conn, false, false);
-            if (ret < 0)
-                goto done;
-        }
+        ret = _conn_tx_msg_retry(conn, msg.pp_start, conn->msg_tx_seq++,
+                                 msg.flag);
+        if (ret < 0)
+            goto done;
     }
 
     /* Wait for all transmits to complete. */
@@ -623,7 +605,6 @@ static int do_client_pong(struct stuff *conn)
     struct enqa_msg     msg;
     uint64_t            start;
     uint64_t            delta;
-    uint32_t            rx_seq MAYBE_UNUSED;
 
     zhpeq_print_xq_info(conn->zxq);
 
@@ -648,14 +629,15 @@ static int do_client_pong(struct stuff *conn)
 
     conn_tx_stats_reset(conn);
     for (i = 0; i < conn->rqlen; i++) {
-        ret = conn_tx_msg(conn, 0, 0);
+        ret = _conn_tx_msg_retry(conn, 0, conn->msg_tx_seq++, 0);
         if (ret < 0)
             goto done;
         ret = _conn_tx_completions_wait(conn, false, true);
         if (ret < 0)
             goto done;
     }
-    ret = conn_tx_msg(conn, 0, 0);
+    /* No sequence because it is expected to fail. */
+    ret = _conn_tx_msg_retry(conn, 0, 0, 0);
     if (ret < 0)
         goto done;
     ret = conn_tx_completions_wait(conn, true, true);
@@ -679,7 +661,7 @@ static int do_client_pong(struct stuff *conn)
     conn_tx_stats_reset(conn);
     for (i = 0; i < DEFAULT_EPOLL; i++) {
         start = get_cycles(NULL);
-        ret = conn_tx_msg(conn, 0, 0);
+        ret = _conn_tx_msg_retry(conn, 0, conn->msg_tx_seq++, 0);
         if (ret < 0)
             goto done;
         ret = _conn_tx_completions_wait(conn, false, false);
@@ -706,20 +688,16 @@ static int do_client_pong(struct stuff *conn)
      */
     conn_tx_stats_reset(conn);
     conn_rx_stats_reset(conn, 0);
-    rx_seq = conn->rx_seq;
     start = get_cycles(NULL);
     for (tx_count = rx_count = warmup_count = 0;
          tx_count != rx_count || tx_flag_out != TX_LAST; ) {
         /* Receive packets up to first miss. */
-        for (rx_seq = conn->rx_seq;tx_flag_in != TX_LAST;
-             rx_count++, rx_seq++) {
+        for (;tx_flag_in != TX_LAST; rx_count++) {
             ret = conn_rx_msg(conn, &msg, false);
             if (unlikely(ret < 0))
                 goto done;
             if (!ret)
                 break;
-            assert(be32toh(msg.seq) == rx_seq);
-            assert(conn->rx_seq == rx_seq + 1);
             /* Messages are in sequence. */
             rx_avail++;
             if (msg.flag != tx_flag_in) {
@@ -732,7 +710,7 @@ static int do_client_pong(struct stuff *conn)
             timing_update(&conn->pp_lat,
                           get_cycles(NULL) - be64toh(msg.pp_start));
         }
-        zhpeq_rq_head_update(conn->zrq, true);
+
         ret = _conn_tx_completions(conn, false, false);
         if (ret < 0)
             goto done;
@@ -768,7 +746,7 @@ static int do_client_pong(struct stuff *conn)
                 goto done;
             }
 
-            ret = conn_tx_msg(conn, 0, tx_flag_out);
+            ret = _conn_tx_msg(conn, 0, conn->msg_tx_seq, tx_flag_out);
             if (ret < 0) {
                 if (ret == -EAGAIN) {
                     if (tx_flag_out == TX_LAST)
@@ -777,6 +755,7 @@ static int do_client_pong(struct stuff *conn)
                 }
                 goto done;
             }
+            conn->msg_tx_seq++;
             do_rx_log(__LINE__, NULL, conn->tx_seq, tx_count, rx_count);
         }
     }

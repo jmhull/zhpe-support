@@ -288,24 +288,20 @@ static int do_mem_xchg(struct stuff *conn)
 static int zxq_completions(struct zhpeq_xq *zxq)
 {
     ssize_t             ret = 0;
-    ssize_t             i;
-    struct zhpeq_xq_cq_entry zxq_comp[TX_WINDOW];
+    struct zhpe_cq_entry *cqe;
+    struct zhpe_cq_entry cqe_copy;
 
-    ret = zhpeq_xq_cq_read(zxq, zxq_comp, ARRAY_SIZE(zxq_comp));
-    if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_xq_cq_read", "", ret);
-        goto done;
-    }
-    for (i = 0; i < ret; i++) {
-        if (zxq_comp[i].z.status != ZHPEQ_XQ_CQ_STATUS_SUCCESS) {
+    while ((cqe = zhpeq_xq_cq_entry(zxq))) {
+        /* unlikely() to optimize the no-error case. */
+        if (unlikely(cqe->status != ZHPEQ_XQ_CQ_STATUS_SUCCESS)) {
+            cqe_copy = *cqe;
+            zhpeq_xq_cq_entry_done(zxq, cqe);
             print_err("%s,%u:index 0x%x status 0x%x\n", __func__, __LINE__,
-                      zxq_comp[i].z.index, zxq_comp[i].z.status);
-            ret = -EIO;
+                      cqe_copy.index, cqe_copy.status);
             break;
         }
+        zhpeq_xq_cq_entry_done(zxq, cqe);
     }
-
- done:
 
     return ret;
 }

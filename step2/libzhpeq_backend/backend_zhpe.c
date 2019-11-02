@@ -715,7 +715,7 @@ static int do_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
             if (!rqi)
                 continue;
             /* Is the current head valid? */
-            if (!zhpeq_rq_entry_valid(&rqi->zrq))
+            if (!zhpeq_rq_entry(&rqi->zrq))
                 /* No. */
                 continue;
             /* A queue has a valid entry. Disable poll checks. */

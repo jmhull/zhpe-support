@@ -65,7 +65,7 @@ struct error_wire_msg {
 };
 
 struct op_context {
-    int                 (*handler)(struct zhpeq_xq_cq_entry *zxq_cqe,
+    int                 (*handler)(struct zhpe_cq_entry *zxq_cqe,
                                    struct op_context *ctxt);
     void                *data;
     size_t              len;
@@ -216,39 +216,38 @@ static int zxq_completions(struct zhpeq_xq *zxq)
 {
     ssize_t             ret = 0;
     int                 rc;
-    ssize_t             i;
-    struct zhpeq_xq_cq_entry zxq_comp[1];
+    struct zhpe_cq_entry *cqe;
+    struct zhpe_cq_entry cqe_copy;
     struct op_context   *ctxt;
 
-    ret = zhpeq_xq_cq_read(zxq, zxq_comp, ARRAY_SIZE(zxq_comp));
-    if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_xq_cq_read", "", ret);
-        goto done;
-    }
-    for (i = ret; i > 0;) {
-        i--;
-        if (zxq_comp[i].z.status != ZHPEQ_XQ_CQ_STATUS_SUCCESS) {
+    while ((cqe = zhpeq_xq_cq_entry(zxq))) {
+        /* unlikely() to optimize the no-error case. */
+        if (unlikely(cqe->status != ZHPEQ_XQ_CQ_STATUS_SUCCESS)) {
+            cqe_copy = *cqe;
+            zhpeq_xq_cq_entry_done(zxq, cqe);
             print_err("%s,%u:index 0x%x status 0x%x\n", __func__, __LINE__,
-                      zxq_comp[i].z.index, zxq_comp[i].z.status);
+                      cqe_copy.index, cqe_copy.status);
+            ret = -EIO;
             break;
         }
-        ctxt = zxq_comp[i].z.context;
+        ctxt = zhpeq_xq_cq_context(zxq, cqe);
+        zhpeq_xq_cq_entry_done(zxq, cqe);
+        ret++;
         if (ctxt && ctxt->handler) {
-            rc = ctxt->handler(&zxq_comp[i], ctxt);
+            rc = ctxt->handler(cqe, ctxt);
             if (rc < 0) {
                 ret = rc;
                 break;
             }
         }
     }
- done:
 
     return ret;
 }
 
-static int geti_handler(struct zhpeq_xq_cq_entry *cqe, struct op_context *ctxt)
+static int geti_handler(struct zhpe_cq_entry *cqe, struct op_context *ctxt)
 {
-    memcpy(ctxt->data, cqe->z.result.data, ctxt->len);
+    memcpy(ctxt->data, cqe->result.data, ctxt->len);
 
     return 0;
 }

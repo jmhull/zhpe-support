@@ -205,6 +205,8 @@ static_assert(INET6_ADDRSTRLEN >= ZHPE_ADDRSTRLEN, "ZHPE_ADDRSTRLEN");
 
 #define _BARRIER_DEFINED
 
+#define barrier()       asm volatile("" ::: "memory")
+
 /*
  * But atomic_thread_fence() didn't generate the fences I wanted when I
  * tested it.
@@ -296,7 +298,6 @@ static inline int ffs64(uint64_t v)
 
 #undef _BARRIED_DEFINED
 
-#define barrier()       __compiler_barrier()
 #define INT32_ALIGNED   __attribute__ ((aligned (__alignof__(int32_t))));
 #define INT64_ALIGNED   __attribute__ ((aligned (__alignof__(int64_t))));
 #define INT128_ALIGNED  __attribute__ ((aligned (__alignof__(__int128_t))));
