@@ -269,7 +269,7 @@ static int conn_tx_completions(struct stuff *conn, bool qfull_ok, bool qd_check)
     struct zhpeq_xq     *zxq = conn->zxq;
     struct enqa_msg     *msg;
     struct enqa_msg     msg_copy;
-    uint32_t            oos;
+    int32_t             oos;
     struct zhpe_cq_entry *cqe;
     struct zhpe_cq_entry cqe_copy;
 
@@ -300,12 +300,11 @@ static int conn_tx_completions(struct stuff *conn, bool qfull_ok, bool qd_check)
             goto done;
         }
         timing_update(&conn->tx_cmp, get_cycles(NULL) - be64toh(msg->tx_start));
-        oos = msg->tx_seq - zxq->cq_head;
+        oos = (int32_t)(msg->tx_seq - zxq->cq_head);
         zhpeq_xq_cq_entry_done(zxq, cqe);
-        assert((int32_t)oos >= 0);
-        if (unlikely(!oos)) {
+        if (unlikely(oos)) {
             conn->tx_oos++;
-            conn->tx_oos_max = max(conn->tx_oos_max, oos);
+            conn->tx_oos_max = max(conn->tx_oos_max, (uint32_t)abs(oos));
         }
     }
  done:
@@ -360,7 +359,7 @@ void do_rx_log(uint line, struct zhpeq_rq *zrq,
 }
 
 static int conn_rx_oos_insert(struct stuff *conn, struct zhpe_rdm_entry *rqe,
-                              uint32_t oos)
+                              int32_t oos)
 {
     int                 ret = 0;
     uint32_t            off = oos + (conn->msg_rx_seq - conn->rx_oos_ent_base);
@@ -370,7 +369,7 @@ static int conn_rx_oos_insert(struct stuff *conn, struct zhpe_rdm_entry *rqe,
         goto done;
     }
     conn->rx_oos++;
-    conn->rx_oos_max = max(conn->rx_oos_max, oos);
+    conn->rx_oos_max = max(conn->rx_oos_max, (uint32_t)oos);
     conn->rx_oos_ent_cnt++;
     conn->rx_oos_ent[off] = *rqe;
     conn->rx_oos_ent[off].hdr.valid = 1;
@@ -382,12 +381,13 @@ static int conn_rx_oos_insert(struct stuff *conn, struct zhpe_rdm_entry *rqe,
 }
 
 static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
-                       uint32_t oos, struct zhpe_rdm_entry *rqe)
+                       int32_t oos, struct zhpe_rdm_entry *rqe)
 {
     struct enqa_msg     *msg = (void *)rqe->payload;
     int                 ret;
     uint32_t            off;
 
+    assert(oos > 0);
     do_rx_log(__LINE__, conn->zrq, conn->msg_rx_seq, be32toh(msg->msg_seq), 0);
     /* Assume 0, 3, 2, 1, 4, ...  */
     if (!conn->rx_oos_ent_cnt) {
@@ -428,7 +428,7 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
     struct zhpe_rdm_entry *rqe;
     struct enqa_msg     *msg;
     uint64_t            now;
-    uint32_t            oos;
+    int32_t             oos;
 
     for (;;) {
         if (unlikely(conn->epoll)) {
@@ -453,7 +453,7 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
             conn->rx_last = now;
 
             msg = (void *)rqe->payload;
-            oos = be32toh(msg->msg_seq) - conn->msg_rx_seq;
+            oos = (int32_t)(be32toh(msg->msg_seq) - conn->msg_rx_seq);
             if (likely(!oos)) {
                 *msg_out = *msg;
                 zhpeq_rq_entry_done(zrq, rqe);
