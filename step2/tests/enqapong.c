@@ -246,6 +246,12 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start,
 #define _conn_tx_msg(...)                                       \
     zhpeu_call_neg(zhpeu_err, conn_tx_msg,  int, __VA_ARGS__)
 
+static int conn_tx_completions(struct stuff *conn, bool qfull_ok,
+                               bool qd_check);
+
+#define _conn_tx_completions(...)                               \
+    zhpeu_call_neg(zhpeu_err, conn_tx_completions,  int, __VA_ARGS__)
+
 static int conn_tx_msg_retry(struct stuff *conn, uint64_t pp_start,
                              uint32_t msg_seq, uint8_t flag)
 {
@@ -254,6 +260,9 @@ static int conn_tx_msg_retry(struct stuff *conn, uint64_t pp_start,
     for (;;) {
         ret = conn_tx_msg(conn, pp_start, msg_seq, flag);
         if (ret >= 0 || ret != -EAGAIN)
+            break;
+        ret = _conn_tx_completions(conn, false, false);
+        if (ret < 0)
             break;
     }
 
@@ -311,9 +320,6 @@ static int conn_tx_completions(struct stuff *conn, bool qfull_ok, bool qd_check)
 
     return ret;
 }
-
-#define _conn_tx_completions(...)                               \
-    zhpeu_call_neg(zhpeu_err, conn_tx_completions,  int, __VA_ARGS__)
 
 static ssize_t conn_tx_completions_wait(struct stuff *conn, bool qfull_ok,
                                        bool qd_check)
