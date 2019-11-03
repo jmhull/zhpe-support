@@ -230,14 +230,14 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start,
     if (!pp_start)
         pp_start = msg->tx_start;
     msg->pp_start = pp_start;
-    msg->msg_seq = htobe32(msg_seq);
+    msg->msg_seq = msg_seq;
     msg->tx_seq = conn->tx_seq++;
     msg->flag = flag;
     zhpeq_xq_insert(zxq, ret, false);
     zhpeq_xq_commit(zxq);
     conn->tx_avail--;
     timing_update(&conn->tx_lat, get_cycles(NULL) - start);
-    do_rx_log(__LINE__, NULL, conn->tx_seq - 1, msg_seq, 0);
+    do_rx_log(__LINE__, NULL, conn->tx_seq - 1, be32toh(msg_seq), 0);
  done:
 
     return ret;
@@ -579,8 +579,8 @@ static int do_server_pong(struct stuff *conn)
             }
             tx_flag_in = msg.flag;
         }
-        ret = _conn_tx_msg_retry(conn, msg.pp_start, conn->msg_tx_seq++,
-                                 msg.flag);
+        ret = _conn_tx_msg_retry(conn, msg.pp_start,
+                                 htobe32(conn->msg_tx_seq++),  msg.flag);
         if (ret < 0)
             goto done;
     }
@@ -636,7 +636,7 @@ static int do_client_pong(struct stuff *conn)
 
     conn_tx_stats_reset(conn);
     for (i = 0; i < conn->rqlen; i++) {
-        ret = _conn_tx_msg_retry(conn, 0, conn->msg_tx_seq++, 0);
+        ret = _conn_tx_msg_retry(conn, 0, htobe32(conn->msg_tx_seq++), 0);
         if (ret < 0)
             goto done;
         ret = _conn_tx_completions_wait(conn, false, true);
@@ -668,7 +668,7 @@ static int do_client_pong(struct stuff *conn)
     conn_tx_stats_reset(conn);
     for (i = 0; i < DEFAULT_EPOLL; i++) {
         start = get_cycles(NULL);
-        ret = _conn_tx_msg_retry(conn, 0, conn->msg_tx_seq++, 0);
+        ret = _conn_tx_msg_retry(conn, 0, htobe32(conn->msg_tx_seq++), 0);
         if (ret < 0)
             goto done;
         ret = _conn_tx_completions_wait(conn, false, false);
@@ -753,7 +753,7 @@ static int do_client_pong(struct stuff *conn)
                 goto done;
             }
 
-            ret = _conn_tx_msg(conn, 0, conn->msg_tx_seq, tx_flag_out);
+            ret = _conn_tx_msg(conn, 0, htobe32(conn->msg_tx_seq), tx_flag_out);
             if (ret < 0) {
                 if (ret == -EAGAIN) {
                     if (tx_flag_out == TX_LAST)
