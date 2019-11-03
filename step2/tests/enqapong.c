@@ -719,7 +719,7 @@ static int do_client_pong(struct stuff *conn)
          tx_count != rx_count || tx_flag_out != TX_LAST; ) {
         /* Receive packets up to first miss. */
         for (;tx_flag_in != TX_LAST; rx_count++) {
-            ret = conn_rx_msg(conn, &msg, false);
+            ret = _conn_rx_msg(conn, &msg, false);
             if (unlikely(ret < 0))
                 goto done;
             if (!ret)
