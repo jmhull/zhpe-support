@@ -386,26 +386,15 @@ static int conn_rx_oos_insert(struct stuff *conn, struct zhpe_rdm_entry *rqe,
     return ret;
 }
 
-static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
-                       int32_t oos, struct zhpe_rdm_entry *rqe)
+static int conn_rx_oos_saved(struct stuff *conn, struct enqa_msg *msg_out)
 {
-    struct enqa_msg     *msg = (void *)rqe->payload;
-    int                 ret;
+    int                 ret = 0;
+    struct enqa_msg     *msg;
     uint32_t            off;
 
-    assert(oos > 0);
-    do_rx_log(__LINE__, conn->zrq, conn->msg_rx_seq, be32toh(msg->msg_seq), 0);
-    /* Assume 0, 3, 2, 1, 4, ...  */
-    if (!conn->rx_oos_ent_cnt) {
-        conn->rx_oos_ent_base = conn->msg_rx_seq;
-        ret = conn_rx_oos_insert(conn, rqe, oos);
-        goto done;
-    }
     /*
-     * If there is a saved entry for the current conn->rx_seq,
-     * we return it and advance conn->rx_seq; we do not advance the queue head.
-     *
-     * If there is no saved entry, then we save the new entry.
+     * If there is a saved entry for the current conn->msg_rx_seq,
+     * we return it and advance conn->msg_rx_seq.
      */
     off = conn->msg_rx_seq - conn->rx_oos_ent_base;
     assert(off < ARRAY_SIZE(conn->rx_oos_ent));
@@ -420,7 +409,28 @@ static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
         conn->rx_oos_ent[off].hdr.valid = 0;
         ret = 1;
         conn->msg_rx_seq++;
-    } else
+    }
+ done:
+
+    return ret;
+}
+
+static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
+                       int32_t oos, struct zhpe_rdm_entry *rqe)
+{
+    int                 ret;
+    struct enqa_msg     *msg = (void *)rqe->payload;
+
+    assert(oos > 0);
+    do_rx_log(__LINE__, conn->zrq, conn->msg_rx_seq, be32toh(msg->msg_seq), 0);
+    /* Example: 0, 3, 2, 1, 4, ...  */
+    if (!conn->rx_oos_ent_cnt) {
+        conn->rx_oos_ent_base = conn->msg_rx_seq;
+        ret = conn_rx_oos_insert(conn, rqe, oos);
+        goto done;
+    }
+    ret = conn_rx_oos_saved(conn, msg_out);
+    if (!ret)
         ret = conn_rx_oos_insert(conn, rqe, oos);
  done:
 
@@ -448,6 +458,8 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
                 conn->epoll = false;
             } else if (!ret) {
                 assert(!sleep_ok);
+                /* Check for an out of sequence final packet. */
+                ret = conn_rx_oos_saved(conn, msg_out);
                 break;
             } else
                 break;
