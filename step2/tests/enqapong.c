@@ -51,9 +51,47 @@
 
 static struct zhpeq_attr zhpeq_attr;
 
-struct zhpeq_rq;
-void do_rx_log(uint line, struct zhpeq_rq *zrq,
-               uint64_t v0, uint64_t v1, uint64_t v2);
+#define DO_LOG          (1)
+
+#if DO_LOG
+
+struct log {
+    int line;
+    uint32_t head;
+    uint32_t head_commit;
+    uint64_t v[3];
+};
+
+struct log dbg_log[4096];
+
+uint32_t dbg_log_idx;
+
+void do_log(uint line, struct zhpeq_rq *zrq,
+            uint64_t v0, uint64_t v1, uint64_t v2)
+{
+    uint32_t i = dbg_log_idx++ & (ARRAY_SIZE(dbg_log) - 1);
+
+    dbg_log[i].line = line;
+    if (zrq) {
+        dbg_log[i].head = zrq->head;
+        dbg_log[i].head_commit = zrq->head_commit;
+    } else {
+        dbg_log[i].head = 0;
+        dbg_log[i].head_commit = 0;
+    }
+    dbg_log[i].v[0] = v0;
+    dbg_log[i].v[1] = v1;
+    dbg_log[i].v[2] = v2;
+}
+
+#else
+
+static inline void do_log(uint line, struct zhpeq_rq *zrq,
+                          uint64_t v0, uint64_t v1, uint64_t v2)
+{
+}
+
+#endif /* DO_LOG */
 
 struct cli_wire_msg {
     uint64_t            poll_usec;
@@ -109,6 +147,7 @@ struct stuff {
     size_t              tx_retry;
     size_t              epoll_cnt;
     uint64_t            poll_cycles;
+    uint64_t            retry_cycles;
     struct timing       tx_lat;
     struct timing       tx_cmp;
     uint64_t            rx_last;
@@ -236,7 +275,7 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start,
     zhpeq_xq_commit(zxq);
     conn->tx_avail--;
     timing_update(&conn->tx_lat, get_cycles(NULL) - start);
-    do_rx_log(__LINE__, NULL, conn->tx_seq - 1, be32toh(msg_seq), 0);
+    do_log(__LINE__, NULL, conn->tx_seq - 1, be32toh(msg_seq), 0);
  done:
 
     return ret;
@@ -284,7 +323,7 @@ static int conn_tx_completions(struct stuff *conn, bool qfull_ok, bool qd_check)
     while ((cqe = zhpeq_xq_cq_entry(zxq))) {
         conn->tx_avail++;
         msg = zhpeq_xq_cq_context(zxq, cqe);
-        do_rx_log(__LINE__, NULL, msg->tx_seq, zxq->cq_head, 0);
+        do_log(__LINE__, NULL, msg->tx_seq, zxq->cq_head, 0);
         /* unlikely() to optimize the no-error case. */
         if (unlikely(cqe->status != ZHPEQ_XQ_CQ_STATUS_SUCCESS)) {
             cqe_copy = *cqe;
@@ -300,7 +339,7 @@ static int conn_tx_completions(struct stuff *conn, bool qfull_ok, bool qd_check)
                  * Retry: given that we're single threaded and we just
                  * freed a tx slot, EAGAIN should not be possible.
                  */
-                do_rx_log(__LINE__, NULL, conn->tx_retry, 0, 0);
+                do_log(__LINE__, NULL, conn->tx_retry, 0, 0);
                 conn->tx_retry++;
                 ret = _conn_tx_msg(conn, msg_copy.pp_start, msg_copy.msg_seq,
                                    msg_copy.flag);
@@ -333,35 +372,6 @@ static ssize_t conn_tx_completions_wait(struct stuff *conn, bool qfull_ok,
 
 #define _conn_tx_completions_wait(...)                          \
     zhpeu_call_neg(zhpeu_err, conn_tx_completions_wait, int,  __VA_ARGS__)
-
-struct rx_log {
-    int line;
-    uint32_t head;
-    uint32_t head_commit;
-    uint64_t v[3];
-};
-
-struct rx_log rx_log[4096];
-
-uint32_t rx_log_idx;
-
-void do_rx_log(uint line, struct zhpeq_rq *zrq,
-               uint64_t v0, uint64_t v1, uint64_t v2)
-{
-    uint32_t i = rx_log_idx++ & (ARRAY_SIZE(rx_log) - 1);
-
-    rx_log[i].line = line;
-    if (zrq) {
-        rx_log[i].head = zrq->head;
-        rx_log[i].head_commit = zrq->head_commit;
-    } else {
-        rx_log[i].head = 0;
-        rx_log[i].head_commit = 0;
-    }
-    rx_log[i].v[0] = v0;
-    rx_log[i].v[1] = v1;
-    rx_log[i].v[2] = v2;
-}
 
 static int conn_rx_oos_insert(struct stuff *conn, struct zhpe_rdm_entry *rqe,
                               int32_t oos)
@@ -422,7 +432,7 @@ static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
     struct enqa_msg     *msg = (void *)rqe->payload;
 
     assert(oos > 0);
-    do_rx_log(__LINE__, conn->zrq, conn->msg_rx_seq, be32toh(msg->msg_seq), 0);
+    do_log(__LINE__, conn->zrq, conn->msg_rx_seq, be32toh(msg->msg_seq), 0);
     /* Example: 0, 3, 2, 1, 4, ...  */
     if (!conn->rx_oos_ent_cnt) {
         conn->rx_oos_ent_base = conn->msg_rx_seq;
@@ -435,6 +445,13 @@ static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
  done:
 
     return ret;
+}
+
+static void cycle_delay(uint64_t start_cyc, uint64_t delay_cyc)
+{
+    while (get_cycles(NULL) - start_cyc < delay_cyc)
+        yield();
+
 }
 
 static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
@@ -503,8 +520,7 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
         }
     }
     if (ret > 0)
-        do_rx_log(__LINE__, zrq, conn->msg_rx_seq,
-                  be32toh(msg_out->msg_seq), 0);
+        do_log(__LINE__, zrq, conn->msg_rx_seq, be32toh(msg_out->msg_seq), 0);
 
     return ret;
 }
@@ -694,8 +710,7 @@ static int do_client_pong(struct stuff *conn)
         ret = _conn_tx_completions_wait(conn, false, false);
         if (ret < 0)
             goto done;
-        while (get_cycles(NULL) - start < conn->poll_cycles * 2)
-            yield();
+        cycle_delay(start, conn->poll_cycles * 2);
     }
 
     conn_stats_print(conn);
