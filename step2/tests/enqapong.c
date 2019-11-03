@@ -160,7 +160,6 @@ static void conn_tx_stats_reset(struct stuff *conn)
 static void conn_rx_stats_reset(struct stuff *conn, uint64_t rx_last)
 {
     timing_reset(&conn->rx_lat);
-    assert(conn->rx_oos_ent_cnt == 0);
     conn->rx_last = rx_last;
     timing_reset(&conn->pp_lat);
 }
