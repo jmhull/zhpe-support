@@ -62,7 +62,7 @@ shift $((( OPTIND - 1 )))
 DRVR=$(cd $DRVR ; pwd)
 
 if ! echo $COPT | grep -qe "[[:space:]]*-O"; then
-    COPT+=" -O2"
+    COPT+=" -O3"
 fi
 
 INSD=$1
