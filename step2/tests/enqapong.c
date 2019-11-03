@@ -66,7 +66,12 @@ struct log dbg_log[4096];
 
 uint32_t dbg_log_idx;
 
-void do_log(uint line, struct zhpeq_rq *zrq,
+static inline void do_log(uint line, struct zhpeq_rq *zrq,
+                          uint64_t v0, uint64_t v1, uint64_t v2)
+{
+}
+
+void do_log2(uint line, struct zhpeq_rq *zrq,
             uint64_t v0, uint64_t v1, uint64_t v2)
 {
     uint32_t i = dbg_log_idx++ & (ARRAY_SIZE(dbg_log) - 1);
@@ -447,7 +452,7 @@ static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
     return ret;
 }
 
-static void cycle_delay(uint64_t start_cyc, uint64_t delay_cyc)
+static void cycles_delay(uint64_t start_cyc, uint64_t delay_cyc)
 {
     while (get_cycles(NULL) - start_cyc < delay_cyc)
         yield();
@@ -710,7 +715,7 @@ static int do_client_pong(struct stuff *conn)
         ret = _conn_tx_completions_wait(conn, false, false);
         if (ret < 0)
             goto done;
-        cycle_delay(start, conn->poll_cycles * 2);
+        cycles_delay(start, conn->poll_cycles * 2);
     }
 
     conn_stats_print(conn);
@@ -1128,6 +1133,8 @@ int main(int argc, char **argv)
     bool                client_opt = false;
     int                 opt;
     int                 rc;
+    struct timespec     ts_beg;
+    struct timespec     ts_end;
 
     zhpeu_util_init(argv[0], LOG_INFO, false);
 
@@ -1142,6 +1149,12 @@ int main(int argc, char **argv)
         zhpeu_print_func_err(__func__, __LINE__, "zhpeq_query_attr", "", rc);
         goto done;
     }
+
+    clock_gettime_monotonic(&ts_beg);
+    cycles_delay(get_cycles(NULL), usec_to_cycles(1000000));
+    clock_gettime_monotonic(&ts_end);
+    zhpeu_print_info("%s:delay_cycles(1 sec) = \n",
+                     zhpeu_appname);
 
     if (argc == 1)
         usage(true);
