@@ -624,7 +624,7 @@ static int do_client_pong(struct stuff *conn)
     const struct args   *args = conn->args;
     uint                tx_flag_in = TX_NONE;
     uint                tx_flag_out = TX_WARMUP;
-    uint64_t            rx_avail = conn->rqlen;
+    uint64_t            rx_avail = min(conn->tqlen, conn->rqlen);
     uint64_t            tx_count;
     uint64_t            rx_count;
     uint64_t            warmup_count;
