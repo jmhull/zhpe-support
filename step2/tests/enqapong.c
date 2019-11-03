@@ -186,7 +186,7 @@ static void conn_stats_print(struct stuff *conn)
     timing_print(&conn->rx_lat, "rx_lat", 1);
     zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max/retry %lu/%u/%lu"
                      " rx_oos/max %lu/%u epoll %lu\n",
-                     zhpeu_appname, conn->zxq->wq_tail, conn->zrq->head,
+                     zhpeu_appname, conn->zxq->cq_head, conn->zrq->head,
                      conn->tx_oos, conn->tx_oos_max, conn->tx_retry,
                      conn->rx_oos, conn->rx_oos_max, conn->epoll_cnt);
 }

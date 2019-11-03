@@ -410,10 +410,10 @@ int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
 {
     int                 ret = -EINVAL;
     struct zhpeq_xqi    *xqi = NULL;
+    struct zhpeq_xq     *zxq = NULL;
     union xdm_cmp_tail  tail = {
         .bits.toggle_valid = 1,
     };
-    struct zhpeq_xq     *zxq;
     int                 flags;
     size_t              i;
     size_t              e;
@@ -707,10 +707,10 @@ int zhpeq_rq_alloc(struct zhpeq_dom *zdom, int rx_qlen, int slice_mask,
 {
     int                 ret = -EINVAL;
     struct zhpeq_rqi    *rqi = NULL;
+    struct zhpeq_rq     *zrq = NULL;
     union rdm_rcv_tail  tail = {
         .bits.toggle_valid = 1,
     };
-    struct zhpeq_rq     *zrq;
     int                 flags;
     size_t              orig;
 
