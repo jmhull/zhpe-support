@@ -51,7 +51,11 @@
 
 static struct zhpeq_attr zhpeq_attr;
 
+#ifdef NDEBUG
+#define DO_LOG          (0)
+#else
 #define DO_LOG          (1)
+#endif
 
 #if DO_LOG
 
@@ -66,12 +70,7 @@ struct log dbg_log[4096];
 
 uint32_t dbg_log_idx;
 
-static inline void do_log(uint line, struct zhpeq_rq *zrq,
-                          uint64_t v0, uint64_t v1, uint64_t v2)
-{
-}
-
-void do_log2(uint line, struct zhpeq_rq *zrq,
+void do_log(uint line, struct zhpeq_rq *zrq,
             uint64_t v0, uint64_t v1, uint64_t v2)
 {
     uint32_t i = dbg_log_idx++ & (ARRAY_SIZE(dbg_log) - 1);
@@ -755,8 +754,6 @@ static int do_client_pong(struct stuff *conn)
                 tx_flag_in = msg.flag;
             }
             delta = get_cycles(NULL) - be64toh(msg.pp_start);
-            if (tx_flag_in != TX_WARMUP)
-                do_log2(__LINE__, conn->zrq, delta, tx_count, rx_count);
             timing_update(&conn->pp_lat, delta);
         }
 
