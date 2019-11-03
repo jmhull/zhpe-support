@@ -51,6 +51,10 @@
 
 static struct zhpeq_attr zhpeq_attr;
 
+struct zhpeq_rq;
+void do_rx_log(uint line, struct zhpeq_rq *zrq,
+               uint64_t v0, uint64_t v1, uint64_t v2);
+
 struct cli_wire_msg {
     uint64_t            poll_usec;
     uint64_t            rqlen;
@@ -227,12 +231,13 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start,
         pp_start = msg->tx_start;
     msg->pp_start = pp_start;
     msg->msg_seq = htobe32(msg_seq);
-    msg->tx_seq = htobe32(conn->tx_seq++);
+    msg->tx_seq = conn->tx_seq++;
     msg->flag = flag;
     zhpeq_xq_insert(zxq, ret, false);
     zhpeq_xq_commit(zxq);
     conn->tx_avail--;
     timing_update(&conn->tx_lat, get_cycles(NULL) - start);
+    do_rx_log(__LINE__, NULL, conn->tx_seq - 1, msg_seq, 0);
  done:
 
     return ret;
@@ -271,6 +276,7 @@ static int conn_tx_completions(struct stuff *conn, bool qfull_ok, bool qd_check)
     while ((cqe = zhpeq_xq_cq_entry(zxq))) {
         conn->tx_avail++;
         msg = zhpeq_xq_cq_context(zxq, cqe);
+        do_rx_log(__LINE__, NULL, msg->tx_seq, zxq->cq_head, 0);
         /* unlikely() to optimize the no-error case. */
         if (unlikely(cqe->status != ZHPEQ_XQ_CQ_STATUS_SUCCESS)) {
             cqe_copy = *cqe;
@@ -286,6 +292,7 @@ static int conn_tx_completions(struct stuff *conn, bool qfull_ok, bool qd_check)
                  * Retry: given that we're single threaded and we just
                  * freed a tx slot, EAGAIN should not be possible.
                  */
+                do_rx_log(__LINE__, NULL, conn->tx_retry, 0, 0);
                 conn->tx_retry++;
                 ret = _conn_tx_msg(conn, msg_copy.pp_start, msg_copy.msg_seq,
                                    msg_copy.flag);
@@ -293,7 +300,7 @@ static int conn_tx_completions(struct stuff *conn, bool qfull_ok, bool qd_check)
             goto done;
         }
         timing_update(&conn->tx_cmp, get_cycles(NULL) - be64toh(msg->tx_start));
-        oos = be32toh(msg->tx_seq) - zxq->cq_head;
+        oos = msg->tx_seq - zxq->cq_head;
         zhpeq_xq_cq_entry_done(zxq, cqe);
         assert((int32_t)oos >= 0);
         if (unlikely(!oos)) {
@@ -756,7 +763,6 @@ static int do_client_pong(struct stuff *conn)
                 goto done;
             }
             conn->msg_tx_seq++;
-            do_rx_log(__LINE__, NULL, conn->tx_seq, tx_count, rx_count);
         }
     }
 
