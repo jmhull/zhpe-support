@@ -754,8 +754,10 @@ static int do_client_pong(struct stuff *conn)
                 }
                 tx_flag_in = msg.flag;
             }
-            timing_update(&conn->pp_lat,
-                          get_cycles(NULL) - be64toh(msg.pp_start));
+            delta = get_cycles(NULL) - be64toh(msg.pp_start);
+            if (tx_flag_in != TX_WARMUP)
+                do_log2(__LINE__, conn->zrq, delta, tx_count, rx_count);
+            timing_update(&conn->pp_lat, delta);
         }
 
         ret = _conn_tx_completions(conn, false, false);
