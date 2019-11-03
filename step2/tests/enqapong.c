@@ -1121,9 +1121,9 @@ int main(int argc, char **argv)
         goto done;
     }
 
-    ret = zhpeq_query_attr(&zhpeq_attr);
-    if (ret < 0) {
-        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_query_attr", "", ret);
+    rc = zhpeq_query_attr(&zhpeq_attr);
+    if (rc < 0) {
+        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_query_attr", "", rc);
         goto done;
     }
 
