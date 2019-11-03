@@ -352,7 +352,7 @@ void zhpeu_dbg(const char *callf, uint line, const char *errf, int ret);
 
 #define zhpeu_posixcall(_err_handler, _func, ...)               \
 ({                                                              \
-    int                 __ret = -_func(__VA_ARGS__);            \
+    int                  __ret = -_func(__VA_ARGS__);           \
                                                                 \
     if (unlikely(__ret))                                        \
         _err_handler(__func__, __LINE__, #_func, __ret);        \
@@ -361,10 +361,10 @@ void zhpeu_dbg(const char *callf, uint line, const char *errf, int ret);
 
 #define zhpeu_posixcall_errorok(_err_handler, _func, _err, ...) \
 ({                                                              \
-    int                 __ret = -_func(__VA_ARGS__);            \
-    int                 __err = (_err);                         \
+    int                  __ret = -_func(__VA_ARGS__);           \
+    int                  __err = (_err);                        \
                                                                 \
-    if (unlikely(__ret)&& __ret != __err)                       \
+    if (unlikely(__ret) && __ret != __err)                      \
         _err_handler(__func__, __LINE__, #_func, __ret);        \
     __ret;                                                      \
 })
@@ -374,6 +374,16 @@ void zhpeu_dbg(const char *callf, uint line, const char *errf, int ret);
     _rtype               __ret = _func(__VA_ARGS__);            \
                                                                 \
     if (unlikely(__ret < 0))                                    \
+        _err_handler(__func__, __LINE__, #_func, __ret);        \
+    __ret;                                                      \
+})
+
+#define zhpeu_call_neg_errorok(_err_handler, _func, _rtype, _err, ...) \
+({                                                              \
+    _rtype               __ret = _func(__VA_ARGS__);            \
+    int                  __err = (_err);                        \
+                                                                \
+    if (unlikely(__ret < 0 ) && __ret != __err)                 \
         _err_handler(__func__, __LINE__, #_func, __ret);        \
     __ret;                                                      \
 })

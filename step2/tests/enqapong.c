@@ -244,7 +244,7 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start,
 }
 
 #define _conn_tx_msg(...)                                       \
-    zhpeu_call_neg(zhpeu_err, conn_tx_msg,  int, __VA_ARGS__)
+    zhpeu_call_neg_errorok(zhpeu_err, conn_tx_msg,  int, -EAGAIN, __VA_ARGS__)
 
 static int conn_tx_completions(struct stuff *conn, bool qfull_ok,
                                bool qd_check);
@@ -258,7 +258,7 @@ static int conn_tx_msg_retry(struct stuff *conn, uint64_t pp_start,
     int                 ret;
 
     for (;;) {
-        ret = conn_tx_msg(conn, pp_start, msg_seq, flag);
+        ret = _conn_tx_msg(conn, pp_start, msg_seq, flag);
         if (ret >= 0 || ret != -EAGAIN)
             break;
         ret = _conn_tx_completions(conn, false, false);
