@@ -459,7 +459,8 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
             } else if (!ret) {
                 assert(!sleep_ok);
                 /* Check for an out of sequence final packet. */
-                ret = conn_rx_oos_saved(conn, msg_out);
+                if (conn->rx_oos_ent_cnt)
+                    ret = conn_rx_oos_saved(conn, msg_out);
                 break;
             } else
                 break;
