@@ -370,6 +370,7 @@ static int conn_rx_oos_insert(struct stuff *conn, struct zhpe_rdm_entry *rqe,
     int                 ret = 0;
     uint32_t            off = oos + (conn->msg_rx_seq - conn->rx_oos_ent_base);
 
+    assert(off < ARRAY_SIZE(conn->rx_oos_ent));
     if (off >= ARRAY_SIZE(conn->rx_oos_ent)) {
         ret = -EOVERFLOW;
         goto done;
@@ -408,8 +409,9 @@ static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
      * If there is no saved entry, then we save the new entry.
      */
     off = conn->msg_rx_seq - conn->rx_oos_ent_base;
+    assert(off < ARRAY_SIZE(conn->rx_oos_ent));
     if (off >= ARRAY_SIZE(conn->rx_oos_ent)) {
-        ret = -EIO;
+        ret = -EOVERFLOW;
         goto done;
     }
     if (conn->rx_oos_ent[off].hdr.valid) {
