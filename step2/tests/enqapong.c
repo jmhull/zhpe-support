@@ -1153,8 +1153,8 @@ int main(int argc, char **argv)
     clock_gettime_monotonic(&ts_beg);
     cycles_delay(get_cycles(NULL), usec_to_cycles(1000000));
     clock_gettime_monotonic(&ts_end);
-    zhpeu_print_info("%s:delay_cycles(1 sec) = " PRIu64 "\n",
-                     zhpeu_appname);
+    zhpeu_print_info("%s:delay_cycles(1 sec) = %" PRIu64 "\n",
+                     zhpeu_appname, ts_delta(&ts_beg, &ts_end));
 
     if (argc == 1)
         usage(true);
