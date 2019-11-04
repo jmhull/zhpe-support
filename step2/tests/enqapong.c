@@ -1129,8 +1129,6 @@ int main(int argc, char **argv)
     bool                client_opt = false;
     int                 opt;
     int                 rc;
-    struct timespec     ts_beg;
-    struct timespec     ts_end;
 
     zhpeu_util_init(argv[0], LOG_INFO, false);
 
@@ -1145,12 +1143,6 @@ int main(int argc, char **argv)
         zhpeu_print_func_err(__func__, __LINE__, "zhpeq_query_attr", "", rc);
         goto done;
     }
-
-    clock_gettime_monotonic(&ts_beg);
-    cycles_delay(get_cycles(NULL), usec_to_cycles(1000000));
-    clock_gettime_monotonic(&ts_end);
-    zhpeu_print_info("%s:delay_cycles(1 sec) = %" PRIu64 "\n",
-                     zhpeu_appname, ts_delta(&ts_beg, &ts_end));
 
     if (argc == 1)
         usage(true);
