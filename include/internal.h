@@ -53,24 +53,26 @@ _EXTERN_C_BEG
 #define DEV_NAME        "/dev/"DRIVER_NAME
 
 struct key_data_packed;
+struct zhpeq_domi;
+struct zhpeq_rqi;
+struct zhpeq_xqi;
 
 struct backend_ops {
     int                 (*lib_init)(struct zhpeq_attr *attr);
-    int                 (*domain)(struct zhpeq_dom *zdom);
-    int                 (*domain_free)(struct zhpeq_dom *zdom);
-    int                 (*qalloc)(struct zhpeq *zq, int cmd_qlen, int cmp_qlen,
-                                  int traffic_class, int priority,
-                                  int slice_mask);
-    int                 (*qalloc_post)(struct zhpeq *zq);
-    int                 (*qfree_pre)(struct zhpeq *zq);
-    int                 (*qfree)(struct zhpeq *zq);
-    int                 (*exchange)(struct zhpeq *zq, int sock_fd,
-                                    void *sa, size_t *sa_len);
-    int                 (*open)(struct zhpeq *zq, void *sa);
-    int                 (*close)(struct zhpeq *zq, int open_idx);
-    int                 (*wq_signal)(struct zhpeq *zq);
-    ssize_t             (*cq_poll)(struct zhpeq *zq, size_t len);
-    int                 (*mr_reg)(struct zhpeq_dom *zdom,
+    int                 (*domain)(struct zhpeq_domi *zdomi);
+    int                 (*domain_free)(struct zhpeq_domi *zdomi);
+    int                 (*xqalloc)(struct zhpeq_xqi *xqi,
+                                   int cmd_qlen, int cmp_qlen,
+                                   int traffic_class, int priority,
+                                   int slice_mask);
+    int                 (*xqalloc_post)(struct zhpeq_xqi *xqi);
+    int                 (*xqfree_pre)(struct zhpeq_xqi *xqi);
+    int                 (*xqfree)(struct zhpeq_xqi *xqi);
+    int                 (*open)(struct zhpeq_xqi *xqi, void *sa);
+    int                 (*close)(struct zhpeq_xqi *xqi, int open_idx);
+    int                 (*wq_signal)(struct zhpeq_xqi *zxq);
+    ssize_t             (*cq_poll)(struct zhpeq_xqi *xqi, size_t len);
+    int                 (*mr_reg)(struct zhpeq_domi *zdomi,
                                   const void *buf, size_t len, uint32_t access,
                                   struct zhpeq_key_data **qkdata_out);
     int                 (*mr_free)(struct zhpeq_key_data *qkdata);
@@ -89,14 +91,17 @@ struct backend_ops {
     int                 (*mmap_commit)(struct zhpeq_mmap_desc *zmdesc,
                                        const void *addr, size_t length,
                                        bool fence, bool invalidate, bool wait);
-    void                (*print_info)(struct zhpeq *zq);
-    int                 (*getaddr)(struct zhpeq *zq, void *sa, size_t *sa_len);
+    void                (*print_xq_info)(struct zhpeq_xq *zxq);
+    int                 (*xq_get_addr)(struct zhpeq_xq *zxq, void *sa,
+                                    size_t *sa_len);
     char                *(*qkdata_id_str)(const struct zhpeq_key_data *qkdata);
 };
 
+extern void             (*zhpeq_mcommit)(void);
 extern uuid_t           zhpeq_uuid;
 
-void zhpeq_register_backend(enum zhpe_backend backend, struct backend_ops *ops);
+void zhpeq_register_backend(enum zhpeq_backend backend,
+                            struct backend_ops *ops);
 void zhpeq_backend_libfabric_init(int fd);
 void zhpeq_backend_zhpe_init(int fd);
 
@@ -112,50 +117,23 @@ struct zhpeq_ht {
     uint32_t            tail;
 } INT64_ALIGNED;
 
-struct zhpeq_dom {
+struct zhpeq_domi {
+    struct zhpeq_dom    zdom;
     void                *backend_data;
 };
 
-struct zhpeq_hist {
-    uint32_t            qhead;
-    uint32_t            qtail;
-    uint32_t            qnew;
-    uint32_t            xhead;
-    uint32_t            xtail;
-};
-
-struct zhpeq {
-    struct zhpeq_dom    *zdom;
-    struct zhpe_xqinfo  xqinfo;
-    volatile void       *qcm;
-    union zhpe_hw_wq_entry *wq;
-    union zhpe_hw_cq_entry *cq;
-    void                **context;
+struct zhpeq_xqi {
+    struct zhpeq_xq     zxq;
     void                *backend_data;
-    int                 fd;
-    struct zhpeq_ht     head_tail CACHE_ALIGNED;
-    struct free_index   context_free;
-    uint32_t            tail_commit CACHE_ALIGNED;
-#if ZHPEQ_RECORD
-    uint32_t            hist_idx;
-    struct zhpeq_hist   hist[0];
-#endif
+    int                 dev_fd;
 };
 
-static inline uint8_t cq_valid(uint32_t idx, uint32_t qmask)
-{
-    return ((idx & (qmask + 1)) ? 0 : ZHPE_HW_CQ_VALID);
-}
-
-static inline uint64_t ioread64(const volatile void *addr)
-{
-    return le64toh(*(const volatile uint64_t *)addr);
-}
-
-static inline void iowrite64(uint64_t value, volatile void *addr)
-{
-    *(volatile uint64_t *)addr = htole64(value);
-}
+struct zhpeq_rqi {
+    struct zhpeq_rq     zrq;
+    struct zhpeq_rqi    *next;
+    int                 poll_fd;
+    int                 dev_fd;
+};
 
 #define ZHPEQ_MR_VALID_MASK \
     (ZHPE_MR_GET | ZHPE_MR_PUT | ZHPE_MR_SEND | ZHPE_MR_RECV | \
@@ -198,7 +176,7 @@ static inline void unpack_kdata(const struct key_data_packed *pdata,
 struct zhpeq_mr_desc_common_hdr {
     uint32_t            magic;
     uint32_t            version;
-    struct zhpeq_dom    *zdom;
+    struct zhpeq_domi   *zdomi;
 };
 
 struct zhpeq_mr_desc_v1 {
@@ -232,6 +210,24 @@ union rdm_rcv_tail {
     struct zhpe_rdm_rcv_queue_tail_toggle bits;
     uint64_t            u64;
 };
+
+union rdm_active {
+    struct zhpe_rdm_active bits;
+    uint64_t            u64;
+};
+
+static inline bool zrq_check_idle(struct zhpeq_rq *zrq)
+{
+    uint32_t            qmask = zrq->rqinfo.cmplq.ent - 1;
+    uint32_t            qhead = (zrq->head_commit & qmask);
+    uint32_t            qtail;
+
+    /* Return true if queue is idle. */
+    qtail = (qcmread64(zrq->qcm,
+                       ZHPE_RDM_QCM_RCV_QUEUE_TAIL_TOGGLE_OFFSET) & qmask);
+
+    return (qhead == qtail);
+}
 
 _EXTERN_C_END
 

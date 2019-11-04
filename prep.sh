@@ -62,7 +62,7 @@ shift $((( OPTIND - 1 )))
 DRVR=$(cd $DRVR ; pwd)
 
 if ! echo $COPT | grep -qe "[[:space:]]*-O"; then
-    COPT+=" -O2"
+    COPT+=" -O3"
 fi
 
 INSD=$1
@@ -82,6 +82,7 @@ fi
     (
 	D=step1
 	ln -sfT $DRVR $APPDIR/$D/asic
+	ln -sfT ../step2/tests $APPDIR/$D/tests
 	mkdir $D
 	cd $D
 	cmake \

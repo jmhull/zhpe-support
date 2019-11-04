@@ -89,8 +89,7 @@ _EXTERN_C_BEG
     __auto_type         __ret = (_a);                           \
     __auto_type         __b = (_b);                             \
     /* Force compilation error if different types. */           \
-    typeof(&__ret)      __p MAYBE_UNUSED;                       \
-    __p = &__b;                                                 \
+    typeof(&__ret)      __p MAYBE_UNUSED = &__b;                \
                                                                 \
     if (__b > __ret)                                            \
         __ret = __b;                                            \
@@ -130,6 +129,7 @@ _EXTERN_C_BEG
 #endif
 
 #define TO_PTR(_int)    (void *)(uintptr_t)(_int)
+#define VPTR(_p, _o)    (void *)((char *)(_p) + _o)
 
 #define FREE_IF(_ptr,_free)                                     \
 do {                                                            \
@@ -144,7 +144,8 @@ do {                                                            \
     int                 __ret = 0;                              \
                                                                 \
     if ((_fd) >= 0) {                                           \
-        __ret = close(_fd);                                     \
+        if (close(_fd) == -1)                                   \
+            __ret = -errno;                                     \
         (_fd) = -1;                                             \
     }                                                           \
     __ret;                                                      \
@@ -157,13 +158,13 @@ typedef unsigned char   uchar;
 extern const char       *zhpeu_appname;
 
 /* Borrow AF_APPLETALK since it should never be seen. */
-#define AF_ZHPE         AF_APPLETALK
-#define ZHPE_ADDRSTRLEN         (37)
+#define AF_ZHPE                 ((sa_family_t)AF_APPLETALK)
+#define ZHPE_ADDRSTRLEN         ((size_t)37)
 #define ZHPE_WILDCARD           (0)     /* Valid, but reserved by driver. */
 #define ZHPE_SZQ_INVAL          (~(uint32_t)0)
 
-#define ZHPE_GCID_MASK          ((1U << ZHPE_GCID_BITS) - 1)
-#define ZHPE_CTXID_MASK         ((1U << ZHPE_CTXID_BITS) - 1)
+#define ZHPE_GCID_MASK          (((uint32_t)1 << ZHPE_GCID_BITS) - 1)
+#define ZHPE_CTXID_MASK         (((uint32_t)1 << ZHPE_CTXID_BITS) - 1)
 
 #define ZHPE_SZQ_FLAGS_MASK     (0xFFU << ZHPE_CTXID_BITS)
 #define ZHPE_SZQ_FLAGS_FAM      (1U << ZHPE_CTXID_BITS)
@@ -200,9 +201,11 @@ static_assert(INET6_ADDRSTRLEN >= ZHPE_ADDRSTRLEN, "ZHPE_ADDRSTRLEN");
 #undef _BARRIER_DEFINED
 #endif
 
-#if defined(__x86_32__) || defined( __x86_64__)
+#ifdef __x86_64__
 
 #define _BARRIER_DEFINED
+
+#define barrier()       asm volatile("" ::: "memory")
 
 /*
  * But atomic_thread_fence() didn't generate the fences I wanted when I
@@ -246,13 +249,45 @@ static inline void nop(void)
     asm volatile("nop");
 }
 
+/*
+ * According to the kernel source, in 64-bit mode, these work without
+ * checking for zero on Intel, despite the documentation. AMD has documented
+ * the desired behavior.
+ */
+static inline int fls32(uint32_t v)
+{
+    int                 ret = -1;
+
+    asm("bsrl %1,%0" : "+r" (ret) : "rm" (v));
+
+    return ret + 1;
+}
+
+static inline int ffs32(uint32_t v)
+{
+    int                 ret = -1;
+
+    asm("bsfl %1,%0" : "+r" (ret) : "rm" (v));
+
+    return ret + 1;
+}
+
 static inline int fls64(uint64_t v)
 {
     int                 ret = -1;
 
-    asm("bsrq %1,%q0" : "+r" (ret) : "r" (v));
+    asm("bsrq %1,%q0" : "+r" (ret) : "rm" (v));
 
-    return ret;
+    return ret + 1;
+}
+
+static inline int ffs64(uint64_t v)
+{
+    int                 ret = -1;
+
+    asm("bsfq %1,%q0" : "+r" (ret) : "rm" (v));
+
+    return ret + 1;
 }
 
 #endif
@@ -263,7 +298,6 @@ static inline int fls64(uint64_t v)
 
 #undef _BARRIED_DEFINED
 
-#define barrier()       __compiler_barrier()
 #define INT32_ALIGNED   __attribute__ ((aligned (__alignof__(int32_t))));
 #define INT64_ALIGNED   __attribute__ ((aligned (__alignof__(int64_t))));
 #define INT128_ALIGNED  __attribute__ ((aligned (__alignof__(__int128_t))));
@@ -275,10 +309,17 @@ static inline int fls64(uint64_t v)
 
 #ifndef likely
 #define likely(_x)      __builtin_expect(!!(_x), 1)
+#endif
+#ifndef unlikely
 #define unlikely(_x)    __builtin_expect(!!(_x), 0)
 #endif
 
 #endif /* __GNUC__ */
+
+static inline int zhpeu_update_error(int old, int new)
+{
+    return ((unlikely(new < 0) && old >= 0) ? new : old);
+}
 
 void zhpeu_util_init(char *argv0, int default_log_level, bool use_syslog);
 void zhpeu_print_dbg(const char *fmt, ...) PRINTF_ARGS(1, 2);
@@ -311,7 +352,7 @@ void zhpeu_dbg(const char *callf, uint line, const char *errf, int ret);
 
 #define zhpeu_posixcall(_err_handler, _func, ...)               \
 ({                                                              \
-    int                 __ret = -_func(__VA_ARGS__);            \
+    int                  __ret = -_func(__VA_ARGS__);           \
                                                                 \
     if (unlikely(__ret))                                        \
         _err_handler(__func__, __LINE__, #_func, __ret);        \
@@ -320,10 +361,10 @@ void zhpeu_dbg(const char *callf, uint line, const char *errf, int ret);
 
 #define zhpeu_posixcall_errorok(_err_handler, _func, _err, ...) \
 ({                                                              \
-    int                 __ret = -_func(__VA_ARGS__);            \
-    int                 __err = (_err);                         \
+    int                  __ret = -_func(__VA_ARGS__);           \
+    int                  __err = (_err);                        \
                                                                 \
-    if (unlikely(__ret)&& __ret != __err)                       \
+    if (unlikely(__ret) && __ret != __err)                      \
         _err_handler(__func__, __LINE__, #_func, __ret);        \
     __ret;                                                      \
 })
@@ -333,6 +374,16 @@ void zhpeu_dbg(const char *callf, uint line, const char *errf, int ret);
     _rtype               __ret = _func(__VA_ARGS__);            \
                                                                 \
     if (unlikely(__ret < 0))                                    \
+        _err_handler(__func__, __LINE__, #_func, __ret);        \
+    __ret;                                                      \
+})
+
+#define zhpeu_call_neg_errorok(_err_handler, _func, _rtype, _err, ...) \
+({                                                              \
+    _rtype               __ret = _func(__VA_ARGS__);            \
+    int                  __err = (_err);                        \
+                                                                \
+    if (unlikely(__ret < 0 ) && __ret != __err)                 \
         _err_handler(__func__, __LINE__, #_func, __ret);        \
     __ret;                                                      \
 })
@@ -380,11 +431,10 @@ char *zhpeu_sockaddr_str(const void *addr);
     __auto_type         __e = (_expected);                      \
     __auto_type         __s = (_saw);                           \
     /* Force compilation error if different types. */           \
-    typeof(&__e)        __p MAYBE_UNUSED;                       \
-    __p = &__s;                                                 \
+    typeof(&__e)        __p MAYBE_UNUSED = &__s;                \
                                                                 \
     __ret = (__e == __s);                                       \
-    if (!__ret) {                                               \
+    if (unlikely(!__ret)) {                                     \
         zhpeu_print_err("%s,%u:%s expected 0x%llx, "            \
                         " saw 0x%llx\n", __func__, __LINE__,    \
                         __lbl, (ullong)__e, (ullong)__s);       \
@@ -433,14 +483,7 @@ char *zhpeu_sockaddr_str(const void *addr);
 #define atm_inc(_p)     atm_add(_p, 1)
 #define atm_dec(_p)     atm_sub(_p, 1)
 
-/* Two simple atomic lists:
- * "lifo" for free lists and a "snatch" list with multiple-producers and
- * one consumer that snatches the entire list for processing at once: this
- * avoids most of the complexities with enqeue and dequeue around A-B-A, but
- * the tail must be handled carefully.
- */
-
-struct zhpeu_atm_list_ptr {
+struct zhpeu_atm_lifo_head {
     struct zhpeu_atm_list_next *ptr;
     uintptr_t            seq;
 } INT128_ALIGNED;
@@ -449,94 +492,11 @@ struct zhpeu_atm_list_next {
     struct zhpeu_atm_list_next *next;
 } INT64_ALIGNED;
 
-struct zhpeu_atm_snatch_head {
-    struct zhpeu_atm_list_next *head;
-    struct zhpeu_atm_list_next *tail;
-} INT128_ALIGNED;
-
-#define ZHPEU_ATM_LIST_END      ((struct zhpeu_atm_list_next *)(intptr_t)-1)
-
-static inline void zhpeu_atm_snatch_insert(struct zhpeu_atm_snatch_head *head,
-                                           struct zhpeu_atm_list_next *new)
-{
-    struct zhpeu_atm_snatch_head oldh;
-    struct zhpeu_atm_snatch_head newh;
-    struct zhpeu_atm_list_next oldn;
-
-    new->next = NULL;
-    for (oldh = atm_load_rlx(head);;) {
-        if (oldh.head) {
-            newh.head = oldh.head;
-            /* Try to link new into list. */
-            oldn.next = NULL;
-            if (!atm_cmpxchg(&oldh.tail->next, &oldn, new)) {
-                /* Failed: advance the tail ourselves and retry. */
-                newh.tail = oldn.next;
-                if (atm_cmpxchg(head, &oldh, newh))
-                    oldh = newh;
-                continue;
-            }
-            /* Try to update the head; succeed or fail, we're done.
-             * If we fail, it is up to the other threads to deal with it.
-             */
-            newh.tail = new;
-            atm_cmpxchg(head, &oldh, newh);
-            break;
-        }
-        /* List was empty. */
-        newh.head = new;
-        newh.tail = new;
-        if (atm_cmpxchg(head, &oldh, newh))
-            break;
-    }
-}
-
-static inline void zhpeu_atm_snatch_list(struct zhpeu_atm_snatch_head *head,
-                                         struct zhpeu_atm_snatch_head *oldh)
-{
-    struct zhpeu_atm_snatch_head newh;
-    struct zhpeu_atm_list_next oldn;
-
-    for (*oldh = atm_load_rlx(head);;) {
-        if (!oldh->head)
-            return;
-        newh.head = NULL;
-        newh.tail = NULL;
-        if (atm_cmpxchg(head, oldh, newh))
-            break;
-    }
-    /*
-     * Worst case: another thread has copied the head and went to sleep
-     * before updating the next pointer and will wake up at some point far
-     * in the future and do so. Or another thread could have successfully
-     * updated next, but the tail update failed. We update the final next
-     * pointer with ZHPEU_ATM_LIST_END to deal with some of this, but the
-     * potential for a thread lurking demands a more structural
-     * solution. The fifo list will also use ZHPEU_ATM_LIST_END, instead of
-     * NULL and the assumption is that items will be bounced between
-     * snatch lists and fifos as free lists; items will never be returned
-     * to a general allocation pool unless some broader guarantee that
-     * it is safe to do so.
-     */
-    for (;;) {
-        oldn.next = NULL;
-        if (atm_cmpxchg(&oldh->tail->next, &oldn, ZHPEU_ATM_LIST_END))
-            break;
-        oldh->tail = oldn.next;
-    }
-}
-
-static inline void zhpeu_atm_fifo_init(struct zhpeu_atm_list_ptr *head)
-{
-    head->ptr = ZHPEU_ATM_LIST_END;
-    head->seq = 0;
-}
-
-static inline void zhpeu_atm_fifo_push(struct zhpeu_atm_list_ptr *head,
+static inline void zhpeu_atm_lifo_push(struct zhpeu_atm_lifo_head *head,
                                        struct zhpeu_atm_list_next *new)
 {
-    struct zhpeu_atm_list_ptr oldh;
-    struct zhpeu_atm_list_ptr newh;
+    struct zhpeu_atm_lifo_head oldh;
+    struct zhpeu_atm_lifo_head newh;
 
     newh.ptr = new;
     for (oldh = atm_load_rlx(head);;) {
@@ -548,18 +508,16 @@ static inline void zhpeu_atm_fifo_push(struct zhpeu_atm_list_ptr *head,
 }
 
 static inline struct zhpeu_atm_list_next *
-zhpeu_atm_fifo_pop(struct zhpeu_atm_list_ptr *head)
+zhpeu_atm_lifo_pop(struct zhpeu_atm_lifo_head *head)
 {
     struct zhpeu_atm_list_next *ret;
-    struct zhpeu_atm_list_ptr oldh;
-    struct zhpeu_atm_list_ptr newh;
+    struct zhpeu_atm_lifo_head oldh;
+    struct zhpeu_atm_lifo_head newh;
 
     for (oldh = atm_load_rlx(head);;) {
         ret = oldh.ptr;
-        if (ret == ZHPEU_ATM_LIST_END) {
-            ret = NULL;
+        if (!ret)
             break;
-        }
         newh.ptr = ret->next;
         newh.seq = oldh.seq + 1;
         if (atm_cmpxchg(head, &oldh, newh))
@@ -583,12 +541,17 @@ extern struct zhpeu_init_time *zhpeu_init_time;
 #define page_size       (zhpeu_init_time->pagesz)
 
 #define NSEC_PER_SEC    (1000000000UL)
-#define NSEC_PER_USEC   (1000000UL)
+#define USEC_PER_SEC    (1000000UL)
 
 static inline double cycles_to_usec(uint64_t delta, uint64_t loops)
 {
-    return (((double)delta * NSEC_PER_USEC) /
+    return (((double)delta * USEC_PER_SEC) /
             ((double)zhpeu_init_time->freq * loops));
+}
+
+static inline uint64_t usec_to_cycles(uint64_t usec)
+{
+    return (usec * zhpeu_init_time->freq / USEC_PER_SEC);
 }
 
 static inline uint64_t get_cycles(volatile uint32_t *cpup)
@@ -606,7 +569,7 @@ static inline void clflush_range(const void *addr, size_t length, bool fence)
     zhpeu_init_time->clflush_range(addr, length, fence);
 }
 
-static inline void clwb_range(const void *addr, size_t length,  bool fence)
+static inline void clwb_range(const void *addr, size_t length, bool fence)
 {
     zhpeu_init_time->clwb_range(addr, length, fence);
 }
@@ -663,8 +626,8 @@ uint zhpeu_random_range(uint start, uint end);
 uint *zhpeu_random_array(uint *array, uint entries);
 
 int zhpeu_munmap(void *addr, size_t length);
-int zhpeu_mmap(void **addr, size_t length, int prot, int flags,
-               int fd, off_t offset);
+void *zhpeu_mmap(void *addr, size_t length, int prot, int flags,
+                 int fd, off_t offset);
 
 char *zhpeu_get_cpuinfo_val(FILE *fp, char *buf, size_t buf_size,
                             uint field, const char *name, ...);
@@ -719,11 +682,13 @@ char *zhpeu_get_cpuinfo_val(FILE *fp, char *buf, size_t buf_size,
     zhpeu_call_null(zhpeu_fatal, realloc, void *, __VA_ARGS__)
 #define xcalloc(...)                                            \
     zhpeu_call_null(zhpeu_fatal, calloc, void *, __VA_ARGS__)
+#define xasprintf(...)                                          \
+    zhpeu_syscall(zhpeu_fatal, asprintf, __VA_ARGS__)
 
 /* Keep _GNU_SOURCE out of the headers. */
 char *zhpeu_asprintf(const char *fmt, ...) PRINTF_ARGS(1, 2);
-#define xasprintf(...)                                          \
-    zhpeu_syscall(zhpeu_fatal, zhpeu_asprintf, __VA_ARGS__)
+#define _zhpeu_asprintf(...)                                    \
+    zhpeu_call_null(zhpeu_err, zhpeu_asprintf, char *,  __VA_ARGS__)
 
 void zhpeu_yield(void);
 #define yield()         zhpeu_yield()
@@ -836,9 +801,9 @@ static inline void *calloc_cachealigned(size_t nmemb, size_t size)
 #define _malloc(...)                                            \
     zhpeu_call_null(zhpeu_err, malloc, void *, __VA_ARGS__)
 #define _realloc(...)                                           \
-    zhpeu_call_null(zhpeu_err, xrealloc, void *, __VA_ARGS__)
+    zhpeu_call_null(zhpeu_err, realloc, void *, __VA_ARGS__)
 #define _calloc(...)                                            \
-    zhpeu_call_null(zhpeu_err, xcalloc, void *, __VA_ARGS__)
+    zhpeu_call_null(zhpeu_err, calloc, void *, __VA_ARGS__)
 #define _asprintf(...)                                          \
     zhpeu_syscall(zhpeu_err, asprintf, __VA_ARGS__)
 #define _malloc_aligned(...)                                    \
@@ -853,35 +818,35 @@ static inline void *calloc_cachealigned(size_t nmemb, size_t size)
 #define _zhpeu_sockaddr_ntop(...)                               \
     zhpeu_call_null(zhpeu_sockaddr_ntop, char *, __VA_ARGS__)
 #define _zhpeu_sockaddr_str(...)                                \
-    zhpeu_call_null(zhpeu_dbg, zhpeu_sockaddr_str, char *, __VA_ARGS__)
+    zhpeu_call_null(zhpeu_err, zhpeu_sockaddr_str, char *, __VA_ARGS__)
 #define _zhpeu_get_cpu_info_val(...)                            \
-    zhpeu_call_null(zhpeu_dbg, zhpeu_get_cpuinfo_val, char *, __VA_ARGS__)
+    zhpeu_call_null(zhpeu_err, zhpeu_get_cpuinfo_val, char *, __VA_ARGS__)
 #define _zhpeu_parse_kb_uint64_t(...)                           \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_parse_kb_uint64_t, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_parse_kb_uint64_t, int, __VA_ARGS__)
 #define _zhpeu_sock_getaddrinfo(...)                            \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_getaddrinfo, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_sock_getaddrinfo, int, __VA_ARGS__)
 #define _zhpeu_sock_connect(...)                                \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_connect, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_sock_connect, int, __VA_ARGS__)
 #define _zhpeu_sock_getsockname(...)                            \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_getsockname, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_sock_getsockname, int, __VA_ARGS__)
 #define _zhpeu_sock_getpeername(...)                            \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_getpeername, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_sock_getpeername, int, __VA_ARGS__)
 #define _zhpeu_sock_send_blob(...)                              \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_send_blob, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_sock_send_blob, int, __VA_ARGS__)
 #define _zhpeu_sock_recv_fixed_blob(...)                        \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_recv_fixed_blob, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_sock_recv_fixed_blob, int, __VA_ARGS__)
 #define _zhpeu_sock_recv_var_blob(...)                          \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_recv_var_blob, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_sock_recv_var_blob, int, __VA_ARGS__)
 #define _zhpeu_sock_send_string(...)                            \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_send_string, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_sock_send_string, int, __VA_ARGS__)
 #define _zhpeu_sock_recv_string(...)                            \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_sock_recv_string, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_sock_recv_string, int, __VA_ARGS__)
 #define _zhpeu_munmap(...)                                      \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_munmap, int, __VA_ARGS__)
+    zhpeu_call_neg(zhpeu_err, zhpeu_munmap, int, __VA_ARGS__)
 #define _zhpeu_mmap(...)                                        \
-    zhpeu_call_neg(zhpeu_dbg, zhpeu_mmap, int, __VA_ARGS__)
+    zhpeu_call_null(zhpeu_err, zhpeu_mmap, void *, __VA_ARGS__)
 #define _zhpeu_get_cpuinfo_val(...)                             \
-    zhpeu_call_null(zhpeu_dbg, zhpeu_get_cpuinfo_val, void *, __VA_ARGS__)
+    zhpeu_call_null(zhpeu_err, zhpeu_get_cpuinfo_val, void *, __VA_ARGS__)
 
 static inline uint64_t roundup64(uint64_t val, uint64_t round)
 {
@@ -893,7 +858,7 @@ static inline uint64_t roundup_pow_of_2(uint64_t val)
     if (!val || !(val & (val - 1)))
         return val;
 
-    return ((uint64_t)1 << (fls64(val) + 1));
+    return ((uint64_t)1 << fls64(val));
 }
 
 static inline uint64_t mask2_off(uint64_t val, uint64_t size)

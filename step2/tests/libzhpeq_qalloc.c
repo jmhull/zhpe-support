@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2018 Hewlett Packard Enterprise Development LP.
+ * Copyright (C) 2017-2019 Hewlett Packard Enterprise Development LP.
  * All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -34,7 +34,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <internal.h>
+#include <zhpeq.h>
+#include <zhpeq_util.h>
 
 #include <limits.h>
 
@@ -179,8 +180,8 @@ static bool queue_ok(const char *label, volatile void *ptr,
 int main(int argc, char **argv)
 {
     int                 ret = 1;
-    struct zhpeq        **zq = NULL;
-    struct zhpeq_dom    *zdom;
+    struct zhpeq_xq     **zxq = NULL;
+    struct zhpeq_dom    *zdom = NULL;
     uint                *shuffle = NULL;
     bool                seed = false;
     size_t              qlen = 0;
@@ -258,8 +259,8 @@ int main(int argc, char **argv)
         qlen = u64;
     }
 
-    zq = calloc(queues, sizeof(*zq));
-    if (!zq)
+    zxq = calloc(queues, sizeof(*zxq));
+    if (!zxq)
         goto done;
     shuffle = calloc(queues, sizeof(*shuffle));
     if (!shuffle)
@@ -283,67 +284,68 @@ int main(int argc, char **argv)
      */
     for (h = 0; h < queues; h++) {
         i = shuffle[h];
-        if (zq[i])
+        if (zxq[i])
             print_err("%s,%u:random_array() broken\n", __func__, __LINE__);
         cmd_len = (qlen ?: random_range(2, attr.z.max_tx_qlen));
         cmp_len = (qlen ?: random_range(2, attr.z.max_tx_qlen));
-        rc = zhpeq_alloc(zdom, cmd_len, cmp_len, i & 0xF, i & 0x1, 0, &zq[i]);
+        rc = zhpeq_xq_alloc(zdom, cmd_len, cmp_len, i & 0xF, i & 0x1, 0,
+                            &zxq[i]);
         if (rc < 0) {
-            print_func_errn(__func__, __LINE__, "zhpeq_alloc", qlen, false,
+            print_func_errn(__func__, __LINE__, "zhpeq_xq_alloc", qlen, false,
                             rc);
             goto done;
         }
-        if (zq[i]->xqinfo.cmdq.ent < cmd_len) {
+        if (zxq[i]->xqinfo.cmdq.ent < cmd_len) {
             print_err("%s,%u:returned cmd_len %u < %lu.\n",
-                      __func__, __LINE__, zq[i]->xqinfo.cmdq.ent, cmd_len);
+                      __func__, __LINE__, zxq[i]->xqinfo.cmdq.ent, cmd_len);
             goto done;
         }
-        if (zq[i]->xqinfo.cmdq.ent & (zq[i]->xqinfo.cmdq.ent - 1)) {
+        if (zxq[i]->xqinfo.cmdq.ent & (zxq[i]->xqinfo.cmdq.ent - 1)) {
             print_err("%s,%u:returned qlen %u not a power of 2.\n",
-                      __func__, __LINE__, zq[i]->xqinfo.cmdq.ent);
+                      __func__, __LINE__, zxq[i]->xqinfo.cmdq.ent);
             goto done;
         }
-        if (zq[i]->xqinfo.cmplq.ent < cmp_len) {
+        if (zxq[i]->xqinfo.cmplq.ent < cmp_len) {
             print_err("%s,%u:returned cmp_len %u < %lu.\n",
-                      __func__, __LINE__, zq[i]->xqinfo.cmplq.ent, cmp_len);
+                      __func__, __LINE__, zxq[i]->xqinfo.cmplq.ent, cmp_len);
             goto done;
         }
-        if (zq[i]->xqinfo.cmplq.ent & (zq[i]->xqinfo.cmplq.ent - 1)) {
+        if (zxq[i]->xqinfo.cmplq.ent & (zxq[i]->xqinfo.cmplq.ent - 1)) {
             print_err("%s,%u:returned qlen %u not a power of 2.\n",
-                      __func__, __LINE__, zq[i]->xqinfo.cmplq.ent);
+                      __func__, __LINE__, zxq[i]->xqinfo.cmplq.ent);
             goto done;
         }
-        if (!qcm_ok(zq[i]->qcm, &zq[i]->xqinfo, i, zhpe, true))
+        if (!qcm_ok(zxq[i]->qcm, &zxq[i]->xqinfo, i, zhpe, true))
             goto done;
-        if (!queue_ok("cmdq",  zq[i]->wq, &zq[i]->xqinfo.cmdq, true))
+        if (!queue_ok("cmdq",  zxq[i]->wq, &zxq[i]->xqinfo.cmdq, true))
             goto done;
-        if (!queue_ok("cmpq",  zq[i]->cq, &zq[i]->xqinfo.cmplq, true))
+        if (!queue_ok("cmpq",  zxq[i]->cq, &zxq[i]->xqinfo.cmplq, true))
             goto done;
     }
     for (i = 0; i < queues; i++) {
-        if (!qcm_ok(zq[i]->qcm, &zq[i]->xqinfo, i, zhpe, false))
+        if (!qcm_ok(zxq[i]->qcm, &zxq[i]->xqinfo, i, zhpe, false))
             goto done;
-        if (!queue_ok("cmdq",  zq[i]->wq, &zq[i]->xqinfo.cmdq, false))
+        if (!queue_ok("cmdq",  zxq[i]->wq, &zxq[i]->xqinfo.cmdq, false))
             goto done;
-        if (!queue_ok("cmpq",  zq[i]->cq, &zq[i]->xqinfo.cmplq, false))
+        if (!queue_ok("cmpq",  zxq[i]->cq, &zxq[i]->xqinfo.cmplq, false))
             goto done;
     }
     /* Free a random 50%. */
     for (i = 0; i < queues; i++) {
         if (random_range(0, 1))
             continue;
-        zhpeq_free(zq[i]);
-        zq[i] = NULL;
+        zhpeq_xq_free(zxq[i]);
+        zxq[i] = NULL;
     }
     /* Check remaining queues. */
     for (i = 0; i < queues; i++) {
-        if (!zq[i])
+        if (!zxq[i])
             continue;
-        if (!qcm_ok(zq[i]->qcm, &zq[i]->xqinfo, i, zhpe, false))
+        if (!qcm_ok(zxq[i]->qcm, &zxq[i]->xqinfo, i, zhpe, false))
             goto done;
-        if (!queue_ok("cmdq",  zq[i]->wq, &zq[i]->xqinfo.cmdq, false))
+        if (!queue_ok("cmdq",  zxq[i]->wq, &zxq[i]->xqinfo.cmdq, false))
             goto done;
-        if (!queue_ok("cmpq",  zq[i]->cq, &zq[i]->xqinfo.cmplq, false))
+        if (!queue_ok("cmpq",  zxq[i]->cq, &zxq[i]->xqinfo.cmplq, false))
             goto done;
     }
     /* Leave a mess for exit+driver to clean up. */
@@ -351,7 +353,7 @@ int main(int argc, char **argv)
 
  done:
     zhpeq_domain_free(zdom);
-    free(zq);
+    free(zxq);
     free(shuffle);
 
     printf("%s:done, ret = %d\n", appname, ret);

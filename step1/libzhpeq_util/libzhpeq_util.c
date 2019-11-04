@@ -55,13 +55,13 @@ static const char *cpuinfo_delim = " \t\n";
 struct zhpeu_init_time  *zhpeu_init_time;
 static struct zhpeu_init_time  init_time;
 
-static struct zhpeu_atm_list_ptr atm_dummy;
+static struct zhpeu_atm_lifo_head atm_dummy;
 
 static void __attribute__((constructor)) lib_init(void)
 {
     long                rcl;
-    struct zhpeu_atm_list_ptr oldh;
-    struct zhpeu_atm_list_ptr newh;
+    struct zhpeu_atm_lifo_head oldh;
+    struct zhpeu_atm_lifo_head newh;
     struct zhpeu_init_time *oldi;
 
     /*
@@ -997,7 +997,7 @@ void *zhpeu_sockaddr_dup(const void *addr)
 
 uint32_t zhpeu_uuid_to_gcid(const uuid_t uuid)
 {
-    return (uuid[0] << 20) | (uuid[1] << 12) | (uuid[3] << 4) | (uuid[3]  >> 4);
+    return (uuid[0] << 20) | (uuid[1] << 12) | (uuid[2] << 4) | (uuid[3]  >> 4);
 }
 
 void zhpeu_install_gcid_in_uuid(uuid_t uuid, uint32_t gcid)
@@ -1296,7 +1296,7 @@ char *zhpeu_sockaddr_str(const void *addr)
         break;
 
     default:
-        break;
+        abort();
     }
 
     ret = zhpeu_asprintf("%s:%s:%d", family, ntop, port);
@@ -1320,19 +1320,14 @@ int zhpeu_munmap(void *addr, size_t length)
     return ret;
 }
 
-int zhpeu_mmap(void **addr, size_t length, int prot, int flags,
-               int fd, off_t offset)
+void *zhpeu_mmap(void *addr, size_t length, int prot, int flags,
+                 int fd, off_t offset)
 {
-    int                 ret = 0;
-    void                *map_addr;
+    void                *ret;
 
-    map_addr = mmap(*addr, length, prot, flags, fd, offset);
-    if (map_addr == MAP_FAILED) {
-        map_addr = NULL;
-        ret = -errno;
-        zhpeu_print_func_err(__func__, __LINE__, "mmap", "", ret);
-    }
-    *addr = map_addr;
+    ret = mmap(addr, length, prot, flags, fd, offset);
+    if (ret == MAP_FAILED)
+        ret = NULL;
 
     return ret;
 }

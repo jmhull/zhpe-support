@@ -73,6 +73,7 @@ int main(int argc, char **argv)
     printf("%s:max_tx_qlen   : %u\n", appname, attr.z.max_tx_qlen);
     printf("%s:max_rx_qlen   : %u\n", appname, attr.z.max_rx_qlen);
     printf("%s:max_dma_len   : %Lu\n", appname, (ullong)attr.z.max_dma_len);
+    printf("%s:num_slices    : %u\n", appname, attr.z.num_slices);
 
  done:
     return ret;

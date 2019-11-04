@@ -44,7 +44,7 @@
 #define TIMEOUT         (10000)
 #endif
 #define L1_CACHELINE    ((size_t)64)
-#define ZQ_LEN          (31)
+#define ZXQ_LEN          (31)
 
 struct cli_wire_msg {
     uint64_t            buf_len;
@@ -65,7 +65,7 @@ struct error_wire_msg {
 };
 
 struct op_context {
-    int                 (*handler)(struct zhpeq_cq_entry *zq_cqe,
+    int                 (*handler)(struct zhpe_cq_entry *zxq_cqe,
                                    struct op_context *ctxt);
     void                *data;
     size_t              len;
@@ -97,7 +97,8 @@ struct checker_data {
 struct stuff {
     const struct args   *args;
     struct zhpeq_dom    *zdom;
-    struct zhpeq        *zq;
+    struct zhpeq_xq     *zxq;
+    struct zhpeq_rq     *zrq;
     struct zhpeq_key_data *lcl_kdata;
     struct zhpeq_key_data *rem_kdata;
     uint64_t            lcl_zaddr;
@@ -110,26 +111,25 @@ struct stuff {
 static void stuff_free(struct stuff *stuff)
 {
     void                *buf;
-    bool                qcm = (stuff->args && stuff->args->qcm);
 
     if (!stuff)
         return;
 
-    if (stuff->zq) {
-        if (qcm)
-            zhpeq_print_qkdata(__func__, __LINE__, stuff->rem_kdata);
-        zhpeq_qkdata_free(stuff->rem_kdata);
+    if (stuff->args && stuff->args->qcm) {
+        zhpeq_print_qkdata(__func__, __LINE__, stuff->rem_kdata);
+        zhpeq_print_qkdata(__func__, __LINE__, stuff->lcl_kdata);
+        zhpeq_print_xq_qcm(__func__, __LINE__, stuff->zxq);
+    }
+    zhpeq_qkdata_free(stuff->rem_kdata);
+    if (stuff->lcl_kdata) {
         buf = (void *)stuff->lcl_kdata->z.vaddr;
-        if (qcm)
-            zhpeq_print_qkdata(__func__, __LINE__, stuff->lcl_kdata);
         zhpeq_qkdata_free(stuff->lcl_kdata);
         free(buf);
     }
     if (stuff->open_idx != -1)
-        zhpeq_backend_close(stuff->zq, stuff->open_idx);
-    if (qcm)
-        zhpeq_print_qcm(__func__, __LINE__, stuff->zq);
-    zhpeq_free(stuff->zq);
+        zhpeq_xq_backend_close(stuff->zxq, stuff->open_idx);
+    zhpeq_rq_free(stuff->zrq);
+    zhpeq_xq_free(stuff->zxq);
     zhpeq_domain_free(stuff->zdom);
 
     FD_CLOSE(stuff->sock_fd);
@@ -176,7 +176,7 @@ static int do_mem_setup(struct stuff *conn)
 static int do_mem_xchg(struct stuff *conn)
 {
     int                 ret;
-    char                blob[ZHPEQ_KEY_BLOB_MAX];
+    char                blob[ZHPEQ_MAX_KEY_BLOB];
     size_t              blob_len;
 
     blob_len = sizeof(blob);
@@ -212,29 +212,29 @@ static int do_mem_xchg(struct stuff *conn)
     return ret;
 }
 
-static inline int zq_completions(struct zhpeq *zq)
+static int zxq_completions(struct zhpeq_xq *zxq)
 {
     ssize_t             ret = 0;
     int                 rc;
-    ssize_t             i;
-    struct zhpeq_cq_entry zq_comp[1];
+    struct zhpe_cq_entry *cqe;
+    struct zhpe_cq_entry cqe_copy;
     struct op_context   *ctxt;
 
-    ret = zhpeq_cq_read(zq, zq_comp, ARRAY_SIZE(zq_comp));
-    if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_cq_read", "", ret);
-        goto done;
-    }
-    for (i = ret; i > 0;) {
-        i--;
-        if (zq_comp[i].z.status != ZHPEQ_CQ_STATUS_SUCCESS) {
-            print_err("%s,%u:I/O error\n", __func__, __LINE__);
+    while ((cqe = zhpeq_xq_cq_entry(zxq))) {
+        /* unlikely() to optimize the no-error case. */
+        if (unlikely(cqe->status != ZHPEQ_XQ_CQ_STATUS_SUCCESS)) {
+            cqe_copy = *cqe;
+            zhpeq_xq_cq_entry_done(zxq, cqe);
             ret = -EIO;
+            print_err("%s,%u:index 0x%x status 0x%x\n", __func__, __LINE__,
+                      cqe_copy.index, cqe_copy.status);
             break;
         }
-        ctxt = zq_comp[i].z.context;
-        if (ctxt) {
-            rc = ctxt->handler(&zq_comp[i], ctxt);
+        ctxt = zhpeq_xq_cq_context(zxq, cqe);
+        zhpeq_xq_cq_entry_done(zxq, cqe);
+        ret++;
+        if (ctxt && ctxt->handler) {
+            rc = ctxt->handler(cqe, ctxt);
             if (rc < 0) {
                 ret = rc;
                 break;
@@ -242,70 +242,53 @@ static inline int zq_completions(struct zhpeq *zq)
         }
     }
 
- done:
-
     return ret;
 }
 
-static int geti_handler(struct zhpeq_cq_entry *cqe, struct op_context *ctxt)
+static int geti_handler(struct zhpe_cq_entry *cqe, struct op_context *ctxt)
 {
-    memcpy(ctxt->data, cqe->z.result.data, ctxt->len);
+    memcpy(ctxt->data, cqe->result.data, ctxt->len);
 
     return 0;
 }
 
-static int zq_op(struct zhpeq *zq, bool read, void *lcl_buf, uint64_t lcl_zaddr,
-                 size_t len, uint64_t rem_zaddr)
+static int zxq_rma_op(struct zhpeq_xq *zxq, bool read, void *lcl_buf,
+                      uint64_t lcl_zaddr, size_t len, uint64_t rem_zaddr)
 {
-    int64_t             ret;
-    uint32_t            zq_index;
-    struct op_context   ctxt;
-    const char          *op_str;
+    int32_t             ret;
+    struct op_context   ctxt = {
+        .handler        = NULL,
+    };
 
-    ret = zhpeq_reserve(zq, 1);
+    ret = zhpeq_xq_reserve(zxq);
     if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_reserve", "", ret);
+        print_func_err(__func__, __LINE__, "zhpeq_xq_reserve", "", ret);
         goto done;
     }
-    zq_index = ret;
+    zhpeq_xq_set_context(zxq, ret, &ctxt);
     if (read) {
         if (lcl_buf) {
-            op_str = "zhpeq_geti";
             ctxt.handler = geti_handler;
             ctxt.data = lcl_buf;
             ctxt.len = len;
-            ret = zhpeq_geti(zq, zq_index, false, len, rem_zaddr, &ctxt);
-        } else {
-            op_str = "zhpeq_get";
-            ret = zhpeq_get(zq, zq_index, false, lcl_zaddr, len, rem_zaddr,
-                            NULL);
-        }
-    } else if (lcl_buf) {
-        op_str = "zhpeq_puti";
-        ret = zhpeq_puti(zq, zq_index, false, lcl_buf, len, rem_zaddr, NULL);
-    } else {
-        op_str = "zhpeq_put";
-        ret = zhpeq_put(zq, zq_index, false, lcl_zaddr, len, rem_zaddr, NULL);
-    }
-    if (ret < 0) {
-        print_func_err(__func__, __LINE__, op_str, "", ret);
-        goto done;
-    }
-    ret = zhpeq_commit(zq, zq_index, 1);
-    if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_commit", "", ret);
-        goto done;
-    }
-    while (!(ret = zq_completions(zq)));
-    if (ret > 0 && !expected_saw("completions", (int64_t)1, ret))
+            zhpeq_xq_geti(zxq, ret, 0, len, rem_zaddr);
+        } else
+            zhpeq_xq_get(zxq, ret, 0, lcl_zaddr, len, rem_zaddr);
+    } else if (lcl_buf)
+        zhpeq_xq_puti(zxq, ret, 0, lcl_buf, len, rem_zaddr);
+    else
+        zhpeq_xq_put(zxq, ret, 0, lcl_zaddr, len, rem_zaddr);
+    zhpeq_xq_insert(zxq, ret, false);
+    zhpeq_xq_commit(zxq);
+    while (!(ret = zxq_completions(zxq)));
+    if (ret > 0 && !expected_saw("completions", 1, ret))
         ret = -EIO;
-
  done:
+
     return ret;
 }
 
-static inline void fill_buf(struct stuff *conn, struct checker_data *data,
-                            bool client)
+static void fill_buf(struct stuff *conn, struct checker_data *data, bool client)
 {
     uint8_t             fill;
 
@@ -317,8 +300,7 @@ static inline void fill_buf(struct stuff *conn, struct checker_data *data,
     memset(data->buf, fill, conn->args->buf_len);
 }
 
-static inline void ramp_buf(struct stuff *conn, struct checker_data *data,
-                            bool client)
+static void ramp_buf(struct stuff *conn, struct checker_data *data, bool client)
 {
     size_t              off;
     uint8_t             fill;
@@ -344,7 +326,7 @@ static inline void ramp_buf(struct stuff *conn, struct checker_data *data,
         data->buf[i] = v;
 }
 
-static inline void print_banner(struct checker_data *data, bool err)
+static void print_banner(struct checker_data *data, bool err)
 {
     const char          *fmt;
 
@@ -357,9 +339,9 @@ static inline void print_banner(struct checker_data *data, bool err)
                    data->op_msg.op_len);
 }
 
-static inline bool checker(struct checker_data *data,
-                           const char *label, bool imm, size_t off,
-                           uint8_t expected, uint8_t saw)
+static bool checker(struct checker_data *data,
+                    const char *label, bool imm, size_t off,
+                    uint8_t expected, uint8_t saw)
 {
 
     if (expected == saw)
@@ -456,7 +438,7 @@ static int do_server_ops(struct stuff *conn)
         data.op_msg.op_len = be64toh(data.op_msg.op_len);
         if (!data.op_msg.op_len)
             goto done;
-        if (data.op_msg.op_len <= ZHPEQ_IMM_MAX && conn->args->imm) {
+        if (data.op_msg.op_len <= ZHPEQ_MAX_IMM && conn->args->imm) {
             ret = do_server_1op(conn, &data, true);
             if (ret < 0)
                 goto done;
@@ -495,8 +477,8 @@ static int do_client_1op(struct stuff *conn, struct checker_data *data,
     /* Fill buffer for put. */
     ramp_buf(conn, data, true);
     /* Do put. */
-    ret = zq_op(conn->zq, false, lcl_buf, lcl_zaddr, data->op_msg.op_len,
-                rem_zaddr);
+    ret = zxq_rma_op(conn->zxq, false, lcl_buf, lcl_zaddr, data->op_msg.op_len,
+                     rem_zaddr);
     if (ret < 0)
         goto done;
     ret = sock_send_blob(conn->sock_fd, NULL, 0);
@@ -517,8 +499,8 @@ static int do_client_1op(struct stuff *conn, struct checker_data *data,
     /* Overwrite ramp for get. */
     fill_buf(conn, data, true);
     /* Do get. */
-    ret = zq_op(conn->zq, true, lcl_buf, lcl_zaddr, data->op_msg.op_len,
-                rem_zaddr);
+    ret = zxq_rma_op(conn->zxq, true, lcl_buf, lcl_zaddr, data->op_msg.op_len,
+                     rem_zaddr);
     if (ret < 0)
         goto done;
     rc = check_buf(conn, data, imm, true);
@@ -553,7 +535,7 @@ static int do_client_op(struct stuff *conn, size_t coff, size_t soff,
     data.op_msg.soff = soff;
     data.op_msg.op_len = op_len;
 
-    if (data.op_msg.op_len <= ZHPEQ_IMM_MAX && conn->args->imm) {
+    if (data.op_msg.op_len <= ZHPEQ_MAX_IMM && conn->args->imm) {
         ret = do_client_1op(conn, &data, true, data_err);
         if (ret < 0)
             goto done;
@@ -571,14 +553,14 @@ static int do_client_op(struct stuff *conn, size_t coff, size_t soff,
     return ret;
 }
 
-int do_zq_setup(struct stuff *conn)
+int do_zxq_setup(struct stuff *conn)
 {
     int                 ret;
     union sockaddr_in46 sa;
     size_t              sa_len = sizeof(sa);
-    struct zhpeq_attr   zq_attr;
+    struct zhpeq_attr   zxq_attr;
 
-    ret = zhpeq_query_attr(&zq_attr);
+    ret = zhpeq_query_attr(&zxq_attr);
     if (ret < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_query_attr", "", ret);
         goto done;
@@ -592,24 +574,30 @@ int do_zq_setup(struct stuff *conn)
         print_func_err(__func__, __LINE__, "zhpeq_domain_alloc", "", ret);
         goto done;
     }
-    /* Allocate zqueue. */
-    ret = zhpeq_alloc(conn->zdom, ZQ_LEN, ZQ_LEN, 0, 0, 0,  &conn->zq);
+    /* Allocate zqueues. */
+    ret = zhpeq_xq_alloc(conn->zdom, ZXQ_LEN, ZXQ_LEN, 0, 0, 0,  &conn->zxq);
     if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_qalloc", "", ret);
+        print_func_err(__func__, __LINE__, "zhpeq_xq_alloc", "", ret);
         goto done;
     }
     if (conn->args->qcm)
-        zhpeq_print_qcm(__func__, __LINE__, conn->zq);
-    /* Get address index. */
-    ret = zhpeq_backend_exchange(conn->zq, conn->sock_fd, &sa, &sa_len);
+        zhpeq_print_xq_qcm(__func__, __LINE__, conn->zxq);
+
+    ret = zhpeq_rq_alloc(conn->zdom, 1, 0, &conn->zrq);
     if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_backend_exchange",
-                       "", ret);
+        print_func_err(__func__, __LINE__, "zhpeq_rq_qalloc", "", ret);
         goto done;
     }
-    ret = zhpeq_backend_open(conn->zq, &sa);
+
+    /* Get address index. */
+    ret = zhpeq_rq_xchg_addr(conn->zrq, conn->sock_fd, &sa, &sa_len);
     if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_backend_open", "", ret);
+        print_func_err(__func__, __LINE__, "zhpeq_xq_xchg_addr", "", ret);
+        goto done;
+    }
+    ret = zhpeq_xq_backend_open(conn->zxq, &sa);
+    if (ret < 0) {
+        print_func_err(__func__, __LINE__, "zhpeq_xq_backend_open", "", ret);
         goto done;
     }
     conn->open_idx = ret;
@@ -653,7 +641,7 @@ static int do_server_one(const struct args *oargs, int conn_fd)
     if (ret < 0)
         goto done;
 
-    ret = do_zq_setup(&conn);
+    ret = do_zxq_setup(&conn);
     if (ret < 0)
         goto done;
 
@@ -759,7 +747,7 @@ static int do_client(const struct args *args)
     if (ret < 0)
         goto done;
 
-    ret = do_zq_setup(&conn);
+    ret = do_zxq_setup(&conn);
     if (ret < 0)
         goto done;
 
@@ -811,7 +799,7 @@ static void usage(bool help)
         appname);
 
     if (help)
-        zhpeq_print_info(NULL);
+        zhpeq_print_xq_info(NULL);
 
     exit(help ? 0 : 255);
 }
