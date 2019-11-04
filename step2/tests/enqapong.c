@@ -131,6 +131,7 @@ struct timing {
 };
 
 struct stuff {
+    void                (*free)(void *ptr);
     const struct args   *args;
     struct zhpeq_dom    *zdom;
     struct zhpeq_xq     *zxq;
@@ -167,7 +168,6 @@ struct stuff {
     int                 open_idx;
     uint8_t             qd_last;
     bool                epoll;
-    bool                allocated;
 };
 
 struct enqa_msg {
@@ -246,9 +246,6 @@ static void stuff_free(struct stuff *stuff)
     zhpeq_domain_free(stuff->zdom);
 
     FD_CLOSE(stuff->sock_fd);
-
-    if (stuff->allocated)
-        free(stuff);
 }
 
 static int conn_tx_msg(struct stuff *conn, uint64_t pp_start,
