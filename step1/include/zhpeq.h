@@ -281,6 +281,15 @@ static inline void qcmwrite64(uint64_t value, volatile void *qcm, size_t off)
 
 int32_t zhpeq_xq_reserve(struct zhpeq_xq *zxq);
 
+static inline void zhpeq_xq_unreserve(struct zhpeq_xq *zxq, int32_t reservation)
+{
+    uint16_t            index = (uint16_t)reservation;
+
+    barrier();
+    zxq->free_bitmap[index >> ZHPEQ_BITMAP_SHIFT] |=
+        ((uint64_t)1 << (index & (ZHPEQ_BITMAP_BITS - 1)));
+}
+
 void zhpeq_xq_commit(struct zhpeq_xq *zxq);
 
 static inline void zhpeq_xq_insert(struct zhpeq_xq *zxq, int32_t reservation,
@@ -432,9 +441,7 @@ static inline void zhpeq_xq_cq_entry_done(struct zhpeq_xq *zxq,
      * Simple rule: do not access the cqe or the backup copy of the
      * XDM command after this call.
      */
-    barrier();
-    zxq->free_bitmap[cqe->index >> ZHPEQ_BITMAP_SHIFT] |=
-        ((uint64_t)1 << (cqe->index & (ZHPEQ_BITMAP_BITS - 1)));
+    zhpeq_xq_unreserve(zxq, cqe->index);
     zxq->cq_head++;
 }
 
@@ -531,6 +538,11 @@ int zhpeq_mmap_unmap(struct zhpeq_mmap_desc *zmdesc);
 int zhpeq_mmap_commit(struct zhpeq_mmap_desc *zmdesc,
                       const void *addr, size_t length, bool fence,
                       bool invalidate, bool wait);
+
+static inline bool zhpeq_is_asic(void)
+{
+    return true;
+}
 
 /* Info/debugging */
 
