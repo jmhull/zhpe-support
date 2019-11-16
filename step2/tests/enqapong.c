@@ -487,7 +487,6 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
             } else
                 break;
         }
-        io_rmb();
         if ((rqe = zhpeq_rq_entry(zrq))) {
             msg = (void *)rqe->payload;
             oos = (int32_t)(be32toh(msg->msg_seq) - conn->msg_rx_seq);
