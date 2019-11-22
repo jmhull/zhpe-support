@@ -922,6 +922,9 @@ struct zhpeu_thr_wait {
     int32_t             state;
     pthread_mutex_t     mutex;
     pthread_cond_t      cond;
+    bool                (*signal_fast)(struct zhpeu_thr_wait *thr_wait);
+    void                (*signal_slow)(struct zhpeu_thr_wait *thr_wait,
+                                       bool lock, bool unlock);
 } CACHE_ALIGNED;
 
 #define MS_PER_SEC      (1000UL)
@@ -929,37 +932,24 @@ struct zhpeu_thr_wait {
 #define NS_PER_SEC      (1000000000UL)
 
 enum {
+    ZHPEU_THR_WAIT_NONE,
     ZHPEU_THR_WAIT_IDLE,
     ZHPEU_THR_WAIT_SLEEP,
     ZHPEU_THR_WAIT_SIGNAL,
 };
 
 void zhpeu_thr_wait_init(struct zhpeu_thr_wait *thr_wait);
+void zhpeu_thr_wait_signal_init(
+    struct zhpeu_thr_wait *thr_wait,
+    bool (*signal_fast)(struct zhpeu_thr_wait *thr_wait),
+    void (*signal_slow)(struct zhpeu_thr_wait *thr_wait,
+                        bool lock, bool unlock));
 void zhpeu_thr_wait_destroy(struct zhpeu_thr_wait *thr_wait);
-
-static inline bool zhpeu_thr_wait_signal_fast(struct zhpeu_thr_wait *thr_wait)
-{
-    int32_t             old = ZHPEU_THR_WAIT_IDLE;
-    int32_t             new = ZHPEU_THR_WAIT_SIGNAL;
-
-    /* One sleeper, many wakers. */
-    if (atm_cmpxchg(&thr_wait->state, &old, new) || old == new)
-        /* Done! */
-        return false;
-
-    /* Need slow path. */
-    assert(old == ZHPEU_THR_WAIT_SLEEP);
-
-    return true;
-}
-
-void zhpeu_thr_wait_signal_slow(struct zhpeu_thr_wait *thr_wait,
-                                bool lock, bool unlock);
 
 static inline void zhpeu_thr_wait_signal(struct zhpeu_thr_wait *thr_wait)
 {
-    if (zhpeu_thr_wait_signal_fast(thr_wait))
-        zhpeu_thr_wait_signal_slow(thr_wait, true, true);
+    if (thr_wait->signal_fast(thr_wait))
+        thr_wait->signal_slow(thr_wait, true, true);
 }
 
 static inline bool zhpeu_thr_wait_sleep_fast(struct zhpeu_thr_wait *thr_wait)
@@ -1002,6 +992,11 @@ struct zhpeu_work {
 };
 
 void zhpeu_work_head_init(struct zhpeu_work_head *head);
+void zhpeu_work_head_signal_init(
+    struct zhpeu_work_head *head,
+    bool (*signal_fast)(struct zhpeu_thr_wait *thr_wait),
+    void (*signal_slow)(struct zhpeu_thr_wait *thr_wait,
+                        bool lock, bool unlock));
 void zhpeu_work_head_destroy(struct zhpeu_work_head *head);
 
 static inline void zhpeu_work_init(struct zhpeu_work *work)
@@ -1043,7 +1038,7 @@ static inline void zhpeu_work_queue(struct zhpeu_work_head *head,
     work->worker = worker;
     work->data = data;
     STAILQ_INSERT_TAIL(&head->work_list, work, lentry);
-    if (signal && zhpeu_thr_wait_signal_fast(&head->thr_wait))
+    if (signal && head->thr_wait_signal_fast(thr_wait))
         zhpeu_thr_wait_signal_slow(&head->thr_wait, false, unlock);
     else if (unlock)
         mutex_unlock(&head->thr_wait.mutex);

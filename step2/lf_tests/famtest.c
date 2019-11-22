@@ -193,6 +193,7 @@ static int do_fam(const struct args *args)
             }
         }
     }
+
  done:
     if (fam_sa) {
         for (i = 0; i < args->nfams; i++)
@@ -247,7 +248,7 @@ int main(int argc, char **argv)
         goto done;
 
     ret = 0;
- done:
 
+ done:
     return ret;
 }

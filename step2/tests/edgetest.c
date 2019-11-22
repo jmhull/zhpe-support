@@ -208,7 +208,6 @@ static int do_mem_xchg(struct stuff *conn)
         zhpeq_print_qkdata(__func__, __LINE__, conn->rem_kdata);
 
  done:
-
     return ret;
 }
 
@@ -283,8 +282,8 @@ static int zxq_rma_op(struct zhpeq_xq *zxq, bool read, void *lcl_buf,
     while (!(ret = zxq_completions(zxq)));
     if (ret > 0 && !expected_saw("completions", 1, ret))
         ret = -EIO;
- done:
 
+ done:
     return ret;
 }
 
@@ -415,8 +414,8 @@ static int do_server_1op(struct stuff *conn, struct checker_data *data,
     /* Fill buffer for get. */
     ramp_buf(conn, data, false);
     ret = sock_send_blob(conn->sock_fd, &err_msg, sizeof(err_msg));
- done:
 
+ done:
     return ret;
 }
 
@@ -455,7 +454,6 @@ static int do_server_ops(struct stuff *conn)
     }
 
  done:
-
     return ret;
 }
 
@@ -509,8 +507,8 @@ static int do_client_1op(struct stuff *conn, struct checker_data *data,
         if (conn->args->stop)
             goto done;
     }
- done:
 
+ done:
     return ret;
 }
 
@@ -548,8 +546,8 @@ static int do_client_op(struct stuff *conn, size_t coff, size_t soff,
     ret = do_client_1op(conn, &data, false, data_err);
     if (!data.banner_done && conn->args->verbose)
         print_banner(&data, false);
- done:
 
+ done:
     return ret;
 }
 
@@ -762,6 +760,7 @@ static int do_client(const struct args *args)
             }
         }
     }
+
  err:
     /* Send zero length to cause server exit. */
     rc = do_client_op(&conn, 0, 0, 0, &data_err);
@@ -917,7 +916,7 @@ int main(int argc, char **argv)
         usage(false);
 
     ret = 0;
- done:
 
+ done:
     return ret;
 }

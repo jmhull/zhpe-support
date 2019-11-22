@@ -263,7 +263,6 @@ static int do_server_source(struct stuff *conn)
     fab_print_info(fab_conn);
 
  done:
-
     return ret;
 }
 
@@ -790,7 +789,7 @@ int main(int argc, char **argv)
         usage(false);
 
     ret = 0;
- done:
 
+ done:
     return ret;
 }

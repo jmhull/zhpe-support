@@ -548,7 +548,6 @@ int zhpeu_parse_kb_uint64_t(const char *name, const char *sp, uint64_t *val,
     ret = 0;
 
  done:
-
     return ret;
 }
 
@@ -783,8 +782,8 @@ int zhpeu_sock_send_blob(int fd, const void *blob, size_t blob_len)
         goto done;
     res = write(fd, blob, req);
     ret = zhpeu_check_func_io(__func__, __LINE__, "write", "", req, res, 0);
- done:
 
+ done:
     return ret;
 }
 
@@ -811,8 +810,8 @@ int zhpeu_sock_recv_fixed_blob(int sock_fd, void *blob, size_t blob_len)
         goto done;
     res = read(sock_fd, blob, req);
     ret = zhpeu_check_func_io(__func__, __LINE__, "read", "", req, res, 0);
- done:
 
+ done:
     return ret;
 }
 
@@ -847,6 +846,7 @@ int zhpeu_sock_recv_var_blob(int sock_fd, size_t extra_len,
             goto done;
     }
     memset((char *)*blob + req, 0, extra_len);
+
  done:
     if (ret < 0) {
         free(*blob);
@@ -922,8 +922,8 @@ static int sockaddr_cmpx(const union sockaddr_in46 *sa1,
     if (ret)
         goto done;
     ret = arithcmp(ntohs(local1.sin_port), ntohs(local2.sin_port));
- done:
 
+ done:
     return ret;
 }
 
@@ -1212,7 +1212,6 @@ void zhpeu_sockaddr_6to4(void *addr)
     sa->sa_family = AF_INET;
 
  done:
-
     return;
 }
 
@@ -1250,6 +1249,7 @@ const char *zhpeu_sockaddr_ntop(const void *addr, char *buf, size_t len)
         errno = EAFNOSUPPORT;
         break;
     }
+
  done:
     if (!ret && len > 0)
         buf[0] = '\0';
@@ -1332,12 +1332,43 @@ void *zhpeu_mmap(void *addr, size_t length, int prot, int flags,
     return ret;
 }
 
-void zhpeu_thr_wait_init(struct zhpeu_thr_wait *thr_wait)
+static bool thr_wait_atomic_fast(struct zhpeu_thr_wait *thr_wait)
+{
+    int32_t             old = ZHPEU_THR_WAIT_IDLE;
+    int32_t             new = ZHPEU_THR_WAIT_SIGNAL;
+
+    /* One sleeper, many wakers. */
+    if (atm_cmpxchg(&thr_wait->state, &old, new) || old == new)
+        /* Done! */
+        return false;
+
+    /* Need slow path. */
+    assert(old == ZHPEU_THR_WAIT_SLEEP);
+
+    return true;
+}
+
+static void thr_wait_signal_atomic_slow(struct zhpeu_thr_wait *thr_wait,
+                                        bool lock, bool unlock);
+
+void zhpeu_thr_wait_signal_init(
+    struct zhpeu_thr_wait *thr_wait,
+    bool (*signal_fast)(struct zhpeu_thr_wait *thr_wait),
+    void (*signal_slow)(struct zhpeu_thr_wait *thr_wait,
+                        bool lock, bool unlock))
 {
     memset(thr_wait, 0, sizeof(*thr_wait));
     mutex_init(&thr_wait->mutex, NULL);
     cond_init(&thr_wait->cond, NULL);
+    thr_wait->signal_fast = signal_fast;
+    thr_wait->signal_slow = signal_slow;
     atm_store_rlx(&thr_wait->state, ZHPEU_THR_WAIT_IDLE);
+}
+
+void zhpeu_thr_wait_init(struct zhpeu_thr_wait *thr_wait)
+{
+    zhpeu_thr_wait_signal_init(thr_wait, thr_wait_signal_atomic_fast,
+                               thr_wait_signal_atomic_slow);
 }
 
 void zhpeu_thr_wait_destroy(struct zhpeu_thr_wait *thr_wait)
@@ -1346,8 +1377,8 @@ void zhpeu_thr_wait_destroy(struct zhpeu_thr_wait *thr_wait)
     cond_destroy(&thr_wait->cond);
 }
 
-void zhpeu_thr_wait_signal_slow(struct zhpeu_thr_wait *thr_wait,
-                                bool lock, bool unlock)
+static void thr_wait_signal_atomic_slow(struct zhpeu_thr_wait *thr_wait,
+                                        bool lock, bool unlock)
 {
     int32_t             old = ZHPEU_THR_WAIT_SLEEP;
     int32_t             new = ZHPEU_THR_WAIT_IDLE;
@@ -1397,6 +1428,16 @@ int zhpeu_thr_wait_sleep_slow(struct zhpeu_thr_wait *thr_wait,
         mutex_unlock(&thr_wait->mutex);
 
     return ret;
+}
+
+void zhpeu_work_head_signal_init(
+    struct zhpeu_work_head *head,
+    bool (*signal_fast)(struct zhpeu_thr_wait *thr_wait),
+    void (*signal_slow)(struct zhpeu_thr_wait *thr_wait,
+                        bool lock, bool unlock))
+{
+    zhpeu_thr_wait_signal_init(&head->thr_wait, signal_fast, signal_slow);
+    STAILQ_INIT(&head->work_list);
 }
 
 void zhpeu_work_head_init(struct zhpeu_work_head *head)

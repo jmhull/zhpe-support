@@ -707,7 +707,6 @@ static int lfab_open(struct zhpeq *zq, void *sa)
     }
 
  done:
-
     return ret;
 }
 
@@ -986,6 +985,7 @@ static bool lfab_zq(struct stuff *conn)
             goto done;
         }
     }
+
  eagain:
     /* Get completions. */
     (void)fab_completions(fab_conn->tx_cq, 0, cq_update, zq);

@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2017-2019 Hewlett Packard Enterprise Development LP.
  * All rights reserved.
-5B *
+ *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
  * General Public License (GPL) Version 2, available from the file
@@ -128,8 +128,8 @@ enum zhpeq_backend {
 };
 
 enum {
-    ZHPEQ_MAX_PRI               = 1,
-    ZHPEQ_MAX_TC                = 15,
+    ZHPEQ_MAX_PRI               = ZHPE_PRI_MAX,
+    ZHPEQ_MAX_TC                = ZHPE_TC_MAX,
     ZHPEQ_MAX_IMM               = ZHPE_MAX_IMM,
     ZHPEQ_MAX_KEY_BLOB          = 32,
 };
@@ -192,18 +192,12 @@ struct zhpeq_rq {
     struct zhpe_rqinfo  rqinfo;
     volatile void       *qcm;
     union zhpe_hw_rdm_entry *rq;
+    int                 (*poll_handler)(struct zhpeq_rq *zrq);
+    void                *poll_data;
     uint64_t            rx_poll_start;
     uint32_t            rx_poll_start_head;
     uint32_t            head;
     uint32_t            head_commit;
-};
-
-struct zhpeq_rq_epoll_ring {
-    uint32_t            rq_sz;
-    uint32_t            rq_msk;
-    uint32_t            rq_rd;
-    uint32_t            rq_wr;
-    struct zhpeq_rq     **rq;
 };
 
 static inline int zhpeq_rem_key_access(struct zhpeq_key_data *qkdata,
@@ -250,7 +244,7 @@ int zhpeq_domain_alloc(struct zhpeq_dom **zdom_out);
 int zhpeq_domain_free(struct zhpeq_dom *zdom);
 
 int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
-                   int traffic_class, int priority, int slice_mask,
+                   nt traffic_class, int priority, int slice_mask,
                    struct zhpeq_xq **zxq_out);
 
 int zhpeq_xq_free(struct zhpeq_xq *zxq);
@@ -312,79 +306,71 @@ static inline void zhpeq_xq_set_context(struct zhpeq_xq *zxq,
     zxq->ctx[(uint16_t)reservation] = context;
 }
 
-static inline void zhpeq_xq_nop(struct zhpeq_xq *zxq, int32_t reservation,
+static inline struct zhpeq_hw_wq_entry *zhpeq_xq_get_wqe(struct zhpeq_xq *zxq,
+                                                         int32_t reservation)
+{
+    return &zxq->mem[(uint16_t)reservation];
+}
+
+static inline void zhpeq_xq_nop(struct zhpeq_hw_wq_entry *wqe,
                                 uint16_t op_flags)
 {
-    union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
-
     wqe->hdr.opcode = ZHPE_HW_OPCODE_NOP | op_flags;
 }
 
-static inline void zhpeq_xq_sync(struct zhpeq_xq *zxq, int32_t reservation,
+static inline void zhpeq_xq_sync(struct zhpeq_hw_wq_entry *wqe,
                                  uint16_t op_flags)
 {
-    union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
-
     wqe->hdr.opcode = ZHPE_HW_OPCODE_SYNC | ZHPE_HW_OPCODE_FENCE | op_flags;
 }
 
-static inline void zhpeq_xq_rw(struct zhpeq_xq *zxq, int32_t reservation,
+static inline void zhpeq_xq_rw(struct zhpeq_hw_wq_entry *wqe,
                                uint16_t opcode, uint64_t rd_addr, size_t len,
                                uint64_t wr_addr)
 {
-    union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
-
     wqe->hdr.opcode = opcode;
     wqe->dma.len = len;
     wqe->dma.rd_addr = rd_addr;
     wqe->dma.wr_addr = wr_addr;
 }
 
-static inline void zhpeq_xq_put(struct zhpeq_xq *zxq, int32_t reservation,
+static inline void zhpeq_xq_put(struct zhpeq_hw_wq_entry *wqe,
                                 uint16_t op_flags, uint64_t lcl_addr,
                                 size_t len, uint64_t rem_addr)
 {
-    zhpeq_xq_rw(zxq, reservation, (ZHPE_HW_OPCODE_PUT | op_flags),
-                lcl_addr, len, rem_addr);
+    zhpeq_xq_rw(wqe, (ZHPE_HW_OPCODE_PUT | op_flags), lcl_addr, len, rem_addr);
 }
 
-static inline void zhpeq_xq_puti(struct zhpeq_xq *zxq, int32_t reservation,
-                                 uint16_t op_flags, const void *buf, size_t len,
-                                 uint64_t rem_addr)
+static inline void *zhpeq_xq_puti(struct zhpeq_hw_wq_entry *wqe,
+                                  uint16_t op_flags, uint64_t rem_addr)
 {
-    union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
-
     wqe->hdr.opcode = ZHPE_HW_OPCODE_PUTIMM | op_flags;
     wqe->imm.len = len;
     wqe->imm.rem_addr = rem_addr;
-    memcpy(wqe->imm.data, buf, len);
+
+    return wqe->imm.data;
 }
 
-static inline void zhpeq_xq_get(struct zhpeq_xq *zxq, int32_t reservation,
+static inline void zhpeq_xq_get(struct zhpeq_hw_wq_entry *wqe,
                                 uint16_t op_flags, uint64_t lcl_addr,
                                 size_t len, uint64_t rem_addr)
 {
-    zhpeq_xq_rw(zxq, reservation, (ZHPE_HW_OPCODE_GET | op_flags),
-                rem_addr, len, lcl_addr);
+    zhpeq_xq_rw((ZHPE_HW_OPCODE_GET | op_flags), rem_addr, len, lcl_addr);
 }
 
-static inline void zhpeq_xq_geti(struct zhpeq_xq *zxq, int32_t reservation,
+static inline void zhpeq_xq_geti(struct zhpeq_hw_wq_entry *wqe,
                                  uint16_t op_flags, size_t len,
                                  uint64_t rem_addr)
 {
-    union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
-
     wqe->hdr.opcode = ZHPE_HW_OPCODE_GETIMM | op_flags;
     wqe->imm.len = len;
     wqe->imm.rem_addr = rem_addr;
 }
 
-static inline void *zhpeq_xq_enqa(struct zhpeq_xq *zxq, int32_t reservation,
-                                  uint16_t op_flags, uint32_t dgcid,
-                                  uint32_t rspctxid)
+static inline union zhpe_msg_payload *
+zhpeq_xq_enqa(struct zhpeq_hw_wq_entry *wqe, uint16_t op_flags,
+              uint32_t dgcid, uint32_t rspctxid)
 {
-    union zhpe_hw_wq_entry *wqe = &zxq->mem[(uint16_t)reservation];
-
     wqe->hdr.opcode = ZHPE_HW_OPCODE_ENQA | op_flags;
     wqe->enqa.dgcid = dgcid;
     wqe->enqa.rspctxid = rspctxid;
@@ -392,7 +378,7 @@ static inline void *zhpeq_xq_enqa(struct zhpeq_xq *zxq, int32_t reservation,
     return wqe->enqa.payload;
 }
 
-void zhpeq_xq_atomic(struct zhpeq_xq *zxq, int32_t reservation,
+void zhpeq_xq_atomic(struct zhpeq_hw_wq_entry *wqe,
                      uint16_t op_flags, enum zhpeq_atomic_size datasize,
                      enum zhpeq_atomic_op op, uint64_t rem_addr,
                      const uint64_t *operands);
@@ -450,6 +436,10 @@ int zhpeq_rq_free(struct zhpeq_rq *zrq);
 int zhpeq_rq_alloc(struct zhpeq_dom *zdom, int rx_qlen, int slice_mask,
                    struct zhpeq_rq **zrq_out);
 
+int zhpeq_rq_epoll_add(struct zhpeq_rq *zrq,
+                       int (*poll_handler)(struct zhpeq_rq *zrq),
+                       void *poll_data);
+
 void __zhpeq_rq_head_update(struct zhpeq_rq *zrq);
 
 static inline void zhpeq_rq_head_update(struct zhpeq_rq *zrq, bool zero)
@@ -489,26 +479,8 @@ int zhpeq_rq_get_addr(struct zhpeq_rq *zrq, void *sa, size_t *sa_len);
 int zhpeq_rq_xchg_addr(struct zhpeq_rq *zrq, int sock_fd,
                        void *sa, size_t *sa_len);
 
-int zhpeq_rq_epoll_ring_deinit(struct zhpeq_rq_epoll_ring *zrqring);
-
-int zhpeq_rq_epoll_ring_init(struct zhpeq_rq_epoll_ring *zrqring,
-                             size_t ring_size);
-
-int zhpeq_rq_epoll_ring_ready(void *varg, struct zhpeq_rq *zrq);
-
-static inline
-struct zhpeq_rq *zhpeq_rq_epoll_ring_read(struct zhpeq_rq_epoll_ring *zrqring)
-{
-    assert ((int32_t)(zrqring->rq_wr - zrqring->rq_rd) >= 0);
-    if (zrqring->rq_wr == zrqring->rq_rd)
-        return NULL;
-
-    return zrqring->rq[zrqring->rq_rd++ & zrqring->rq_msk];
-}
-
 int zhpeq_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool entr_ok,
-                   int (*zrq_active)(void *varg, struct zhpeq_rq *zrq),
-                   void *varg);
+                   struct zhpe_rq **zrqs, int n_zrqs);
 
 int zhpeq_rq_epoll_signal(void);
 

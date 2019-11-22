@@ -55,25 +55,32 @@ do {									\
     case FI_ATOMIC_READ:						\
         (_original) = atm_load_rlx(__dst);                              \
         break;                                                          \
-    case FI_ATOMIC_WRITE:						\
+                                                                        \
+    case FI_ATOMIC_WRITE:                                               \
         (_original) = atm_xchg(__dst, __operand);                       \
         break;                                                          \
+                                                                        \
     case FI_BAND:							\
         (_original) = atm_and(__dst, __operand);                        \
         break;                                                          \
+                                                                        \
     case FI_BOR:							\
         (_original) = atm_or(__dst, __operand);                         \
         break;                                                          \
+                                                                        \
     case FI_BXOR:							\
         (_original) = atm_xor(__dst, __operand);                        \
         break;                                                          \
+                                                                        \
     case FI_CSWAP:							\
         atm_cmpxchg(__dst, &__compare, __operand);                      \
         (_original) = __compare;                                        \
         break;                                                          \
+                                                                        \
     case FI_SUM:							\
         (_original) = atm_add(__dst, __operand);                        \
         break;                                                          \
+                                                                        \
     case FI_MSWAP:							\
         __old = atm_load_rlx(__dst);                                    \
         for (;;) {                                                      \
@@ -83,6 +90,7 @@ do {									\
         }                                                               \
         (_original) = __old;                                            \
         break;                                                          \
+                                                                        \
     default:                                                            \
         (_original) = 0;                                                \
         (_status) = -FI_EINVAL;                                         \

@@ -197,6 +197,7 @@ int lf_server_recv_params(int sock_fd, struct lf_params *param)
     if (ret < 0)
         goto done;
     param->domain = s;
+
  done:
     if (ret < 0)
         lf_svr_params_free(param);
@@ -223,8 +224,8 @@ int lf_client_send_params(int sock_fd, struct lf_params *param)
     ret = zhpeu_sock_recv_string(conn.sock_fd, param->domain);
     if (ret < 0)
         goto done;
- done:
 
+ done:
     return ret;
 }
 
@@ -275,6 +276,7 @@ int lf_conn_alloc(const struct lf_params *param, struct lf_conn **lf_conn_out)
     lf_conn->remote_addr = be64toh(mem_msg.remote_addr);
     lf_conn->remote_key  = be64toh(mem_msg.remote_key);
     lf_conn->remote_size = be64toh(mem_msg.remote_size);
+
  done:
     if (ret >= 0)
         *lf_conn_out = lf_conn;
@@ -324,8 +326,8 @@ int lf_server_ep_setup(struct lf_conn *lf_conn)
         if (ret < 0)
             goto done;
     }
- done:
 
+ done:
     return ret;
 }
 
@@ -407,8 +409,8 @@ int lf_client_ep_setup(struct lf_conn *lf_conn)
     lf_conn->remote_addr = be64toh(mem_msg.remote_addr);
     lf_conn->remote_key  = be64toh(mem_msg.remote_key);
     lf_conn->remote_size = be64toh(mem_msg.remote_size);
- done:
 
+ done:
     if (ret >= 0)
         *lf_conn_out = lf_conn;
     else

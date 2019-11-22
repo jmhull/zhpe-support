@@ -160,7 +160,6 @@ struct stuff {
     struct timing       tx_cmp;
     struct timing       rx_lat;
     struct timing       pp_lat;
-    struct zhpeq_rq_epoll_ring epoll_ring;
     size_t              tx_avail;
     size_t              tx_max;
     size_t              rqlen;
@@ -243,7 +242,6 @@ static void stuff_free(struct stuff *stuff)
     if (!stuff)
         return;
 
-    zhpeq_rq_epoll_ring_deinit(&stuff->epoll_ring);
     if (stuff->open_idx != -1)
         zhpeq_xq_backend_close(stuff->zxq, stuff->open_idx);
     zhpeq_rq_free(stuff->zrq);
@@ -282,8 +280,8 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start,
     conn->tx_avail--;
     timing_update(&conn->tx_lat, get_cycles(NULL) - start);
     do_log(__LINE__, NULL, conn->tx_seq - 1, be32toh(msg_seq), 0);
- done:
 
+ done:
     return ret;
 }
 
@@ -360,8 +358,8 @@ static int conn_tx_completions(struct stuff *conn, bool qfull_ok, bool qd_check)
             conn->tx_oos_max = max(conn->tx_oos_max, (uint32_t)abs(oos));
         }
     }
- done:
 
+ done:
     return ret;
 }
 
@@ -398,6 +396,7 @@ static int conn_rx_oos_insert(struct stuff *conn, struct zhpe_rdm_entry *rqe,
     /* Advance the queue head, but not conn->rx_seq. */
     zhpeq_rq_entry_done(conn->zrq, rqe);
     zhpeq_rq_head_update(conn->zrq, false);
+
  done:
     return ret;
 }
@@ -426,8 +425,8 @@ static int conn_rx_oos_saved(struct stuff *conn, struct enqa_msg *msg_out)
         ret = 1;
         conn->msg_rx_seq++;
     }
- done:
 
+ done:
     return ret;
 }
 
@@ -448,8 +447,8 @@ static int conn_rx_oos(struct stuff *conn, struct enqa_msg *msg_out,
     ret = conn_rx_oos_saved(conn, msg_out);
     if (!ret)
         ret = conn_rx_oos_insert(conn, rqe, oos);
- done:
 
+ done:
     return ret;
 }
 
@@ -465,6 +464,7 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
 {
     int                 ret = 0;
     struct zhpeq_rq     *zrq = conn->zrq;
+    struct zhpeq_rq     *epoll_zrqs[1];
     struct zhpe_rdm_entry *rqe;
     struct enqa_msg     *msg;
     int32_t             oos;
@@ -472,11 +472,10 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
     for (;;) {
         if (unlikely(conn->epoll)) {
             ret = zhpeq_rq_epoll((sleep_ok ? -1 : 0), NULL, false,
-                                 zhpeq_rq_epoll_ring_ready, &conn->epoll_ring);
+                                 epoll_zrqs, ARRAY_SIZE(epoll_zrqs));
             if (likely(ret > 0)) {
                 assert(ret == 1);
-                zrq = zhpeq_rq_epoll_ring_read(&conn->epoll_ring);
-                assert(zrq == conn->zrq);
+                assert(zrq == epoll_zrqs[0]);
                 conn->epoll = false;
             } else if (!ret) {
                 assert(!sleep_ok);
@@ -645,8 +644,8 @@ static int do_server_pong(struct stuff *conn)
     zhpeu_print_info("%s:op_cnt/warmup %lu/%lu\n",
                      zhpeu_appname, op_count - warmup_count, warmup_count);
     conn_stats_print(conn);
- done:
 
+ done:
     return ret;
 }
 
@@ -873,8 +872,8 @@ static int do_client_pong(struct stuff *conn)
     zhpeu_print_info("%s:op_cnt/warmup %lu/%lu\n",
                      zhpeu_appname, tx_count - warmup_count, warmup_count);
     conn_stats_print(conn);
- done:
 
+ done:
     return ret;
 }
 
@@ -989,8 +988,8 @@ int do_q_setup(struct stuff *conn)
         goto done;
     }
     conn->epoll = true;
- done:
 
+ done:
     return ret;
 }
 
@@ -1157,6 +1156,7 @@ static int do_client(const struct args *args)
     ret = _zhpeu_sock_recv_fixed_blob(conn.sock_fd, NULL, 0);
     if (ret < 0)
         goto done;
+
  done:
     stuff_free(&conn);
 
@@ -1308,7 +1308,7 @@ int main(int argc, char **argv)
         usage(false);
 
     ret = 0;
- done:
 
+ done:
     return ret;
 }

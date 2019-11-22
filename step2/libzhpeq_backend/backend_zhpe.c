@@ -139,7 +139,6 @@ static int __driver_cmd(union zhpe_op *op, size_t req_len, size_t rsp_len,
                         strerror(-ret));
 
  done:
-
     return ret;
 }
 
@@ -199,8 +198,8 @@ static int zhpe_lib_init(struct zhpeq_attr *attr)
     memcpy(zhpeq_uuid, rsp->init.uuid, sizeof(zhpeq_uuid));
 
     ret = 0;
- done:
 
+ done:
     return ret;
 }
 
@@ -295,8 +294,8 @@ static int zhpe_domain(struct zhpeq_domi *zdomi)
         goto done;
     mutex_init(&bdom->node_mutex, NULL);
     ret = 0;
- done:
 
+ done:
     return ret;
 }
 
@@ -339,8 +338,8 @@ static int zhpe_xq_alloc(struct zhpeq_xqi *xqi, int wqlen, int cqlen,
         goto done;
     xqi->dev_fd = dev_fd;
     xqi->zxq.xqinfo = rsp->xqalloc.info;
- done:
 
+ done:
     return ret;
 }
 
@@ -506,6 +505,7 @@ static int zhpe_rq_epoll_init(void)
         zhpeu_print_func_err(__func__, __LINE__, "epoll_ctl", "ADD", ret);
         goto done;
     }
+
  done:
     if (ret < 0)
         (void)zhpe_rq_epoll_deinit();
@@ -543,8 +543,8 @@ static int zhpe_rq_epoll_del(struct zhpeq_rqi *rqi)
         ret = -errno;
         zhpeu_print_func_err(__func__, __LINE__, "epoll_ctl", "DEL", -errno);
     }
- done:
 
+ done:
     mutex_unlock(&epoll_mutex);
 
     return ret;
@@ -597,8 +597,8 @@ static int zhpe_rq_epoll_add(struct zhpeq_rqi *rqi)
         goto done;
     }
     ret = 0;
- done:
 
+ done:
     if (ret < 0) {
         if (fname) {
             free(fname);
@@ -644,9 +644,8 @@ static int zhpe_rq_alloc(struct zhpeq_rqi *rqi, int rqlen, int slice_mask)
         goto done;
     rqi->dev_fd = dev_fd;
     rqi->zrq.rqinfo = rsp->rqalloc.info;
-    ret = zhpe_rq_epoll_add(rqi);
- done:
 
+ done:
     return ret;
 }
 
@@ -666,14 +665,14 @@ static bool zhpe_rq_epoll_disable(struct zhpeq_rqi *rqi)
 }
 
 static int do_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
-                       int (*zrq_ready)(void *varg, struct zhpeq_rq *zrq),
-                       void *varg)
+                       struct zhpeq_rq **zrqs, int n_zrqs)
 {
     int                 ret;
     uint32_t            irq;
     uint32_t            evts;
     uint32_t            i;
     struct zhpeq_rqi    *rqi;
+    uint32_t            triggered_count;
     int                 nevents;
     struct epoll_event  events[ZHPE_MAX_IRQS];
     char                pipe_buf[32];
@@ -706,8 +705,9 @@ static int do_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
             (void)read(epoll_pipe_fds[0], pipe_buf, sizeof(pipe_buf));
             continue;
         }
-        atm_store(&shared_local->handled_counter[irq],
-                  atm_load(&shared_global->triggered_counter[irq]));
+
+        /* Sample triggered count before cecking the queues. (acquire) */
+        triggered_count = atm_load(&shared_global->triggered_counter[irq]);
 
         for (i = epoll_irq[irq].qnum;
              i < epoll_irq[irq].qnum + epoll_irq[irq].clump; i++) {
@@ -721,17 +721,20 @@ static int do_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
             /* A queue has a valid entry. Disable poll checks. */
             if (!atm_cmpxchg(&epoll_rqi[i], &rqi, NULL))
                 continue;
-            /* Lock succeeded, call zrq_ready(). */
-            ret = zrq_ready(varg, &rqi->zrq);
-            if (ret < 0)
+            /* Lock succeeded. */
+            if (ret >= n_zrqs) {
+                ret = -ENOSPC;
                 goto done_locked;
+            }
+            zrqs[ret++] = rqi->zrq;
         }
+        atm_store(&shared_local->handled_counter[irq], triggered_count);
     }
+
  done_locked:
-
     mutex_unlock(&epoll_mutex);
- done:
 
+ done:
     return ret;
 }
 
@@ -1264,8 +1267,8 @@ static char *zhpe_qkdata_id_str(const struct zhpeq_mr_desc_v1 *desc)
 
     uuid_unparse_upper(bdom->nodes[desc->open_idx].uue->uuid, uuid_str);
     ret = zhpeu_asprintf(ret, "%d %s", desc->open_idx, uuid_str);
- done:
 
+ done:
     return ret;
 }
 

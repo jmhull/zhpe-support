@@ -792,8 +792,8 @@ int fab_av_xchg_addr(struct fab_conn *conn, int sock_fd,
     ret = zhpeu_sock_recv_fixed_blob(sock_fd, ep_addr, sizeof(*ep_addr));
     if (ret < 0)
         goto done;
- done:
 
+ done:
     return ret;
 }
 
@@ -1002,7 +1002,6 @@ int fab_av_wait_send(struct fab_conn *conn, fi_addr_t fi_addr,
     ret = 0;
 
  done:
-
     return ret;
 }
 
@@ -1063,6 +1062,5 @@ int fab_av_wait_recv(struct fab_conn *conn, fi_addr_t fi_addr,
     }
 
  done:
-
     return ret;
 }

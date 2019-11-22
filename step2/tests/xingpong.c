@@ -281,7 +281,6 @@ static int do_mem_xchg(struct stuff *conn)
     }
 
  done:
-
     return ret;
 }
 
@@ -363,8 +362,8 @@ static int zxq_write(struct zhpeq_xq *zxq, const void *buf, uint64_t lcl_zaddr,
         zhpeq_xq_put(zxq, ret, 0, lcl_zaddr, len, rem_zaddr);
     zhpeq_xq_insert(zxq, ret, false);
     zhpeq_xq_commit(zxq);
- done:
 
+ done:
     return ret;
 }
 
@@ -467,7 +466,6 @@ static int do_server_pong(struct stuff *conn)
     printf("%s:op_cnt/warmup %lu/%lu\n", appname, op_count, warmup_count);
 
  done:
-
     return ret;
 }
 
@@ -1141,7 +1139,7 @@ int main(int argc, char **argv)
         usage(false);
 
     ret = 0;
- done:
 
+ done:
     return ret;
 }

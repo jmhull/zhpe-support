@@ -197,8 +197,8 @@ static int do_server_burst(struct stuff *conn)
     }
 
     fab_print_info(fab_conn);
- done:
 
+ done:
     return ret;
 }
 
@@ -676,7 +676,7 @@ int main(int argc, char **argv)
         usage(false);
 
     ret = 0;
- done:
 
+ done:
     return ret;
 }
