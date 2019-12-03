@@ -176,13 +176,14 @@ static inline void unpack_kdata(const struct key_data_packed *pdata,
 struct zhpeq_mr_desc_common_hdr {
     uint32_t            magic;
     uint32_t            version;
+    uint32_t            open_idx;
     struct zhpeq_domi   *zdomi;
+    uint64_t            rsp_zaddr;
 };
 
 struct zhpeq_mr_desc_v1 {
     struct zhpeq_mr_desc_common_hdr hdr;
     struct zhpeq_key_data qkdata;
-    int                 open_idx;
 };
 
 union zhpeq_mr_desc {

@@ -141,10 +141,7 @@ struct zhpeq_attr {
 
 struct zhpeq_key_data {
     struct zhpe_key_data z;
-    union {
-        uint64_t        laddr;
-        uint64_t        rsp_zaddr;
-    };
+    void                *cache;
 };
 
 /* Public portions of structures. */
@@ -200,37 +197,37 @@ struct zhpeq_rq {
     uint32_t            head_commit;
 };
 
-static inline int zhpeq_rem_key_access(struct zhpeq_key_data *qkdata,
+static inline int zhpeq_rem_key_access(const struct zhpeq_key_data *qkdata,
                                        uint64_t start, uint64_t len,
                                        uint32_t qaccess, uint64_t *zaddr)
 {
     struct zhpe_key_data *kdata = &qkdata->z;
 
-    if (!qkdata)
+    if (unlikely(!qkdata))
         return -EINVAL;
     if (kdata->access & ZHPEQ_MR_KEY_ZERO_OFF)
         start += kdata->vaddr;
-    if ((qaccess & kdata->access) != qaccess ||
-        start < kdata->vaddr || start + len > kdata->vaddr + kdata->len)
+    if (unlikely((qaccess & kdata->access) != qaccess || start < kdata->vaddr ||
+                 start + len > kdata->vaddr + kdata->len))
         return -EINVAL;
     *zaddr = (start - kdata->vaddr) + kdata->zaddr;
 
     return 0;
 }
 
-static inline int zhpeq_lcl_key_access(struct zhpeq_key_data *qkdata,
-                                       void *buf, uint64_t len,
+static inline int zhpeq_lcl_key_access(const struct zhpeq_key_data *qkdata,
+                                       const void *buf, uint64_t len,
                                        uint32_t qaccess, uint64_t *zaddr)
 {
     uintptr_t           start = (uintptr_t)buf;
     struct zhpe_key_data *kdata = &qkdata->z;
 
-    if (!qkdata)
+    if (unlikely(!qkdata))
         return -EINVAL;
-    if ((qaccess & kdata->access) != qaccess ||
-        start < kdata->vaddr || start + len > kdata->vaddr + kdata->len)
+    if (unlikely((qaccess & kdata->access) != qaccess || start < kdata->vaddr ||
+                 start + len > kdata->vaddr + kdata->len))
         return -EINVAL;
-    *zaddr = (start - kdata->vaddr) + qkdata->laddr;
+    *zaddr = start;
 
     return 0;
 }
