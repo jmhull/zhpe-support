@@ -241,7 +241,7 @@ int zhpeq_domain_alloc(struct zhpeq_dom **zdom_out);
 int zhpeq_domain_free(struct zhpeq_dom *zdom);
 
 int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
-                   nt traffic_class, int priority, int slice_mask,
+                   int traffic_class, int priority, int slice_mask,
                    struct zhpeq_xq **zxq_out);
 
 int zhpeq_xq_free(struct zhpeq_xq *zxq);

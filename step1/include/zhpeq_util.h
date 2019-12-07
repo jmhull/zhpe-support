@@ -168,11 +168,13 @@ extern const char       *zhpeu_appname;
 
 #define ZHPE_SZQ_FLAGS_MASK     (0xFFU << ZHPE_CTXID_BITS)
 #define ZHPE_SZQ_FLAGS_FAM      (1U << ZHPE_CTXID_BITS)
+#define ZHPE_SZQ_FLAGS_EP       (2U << ZHPE_CTXID_BITS)
 
 struct sockaddr_zhpe {
     sa_family_t         sz_family;
     uuid_t              sz_uuid;
     uint32_t            sz_queue;       /* Network byte order */
+    uint32_t            sz_ep;          /* Network byte order */
 };
 
 uint32_t zhpeu_uuid_to_gcid(const uuid_t uuid);
