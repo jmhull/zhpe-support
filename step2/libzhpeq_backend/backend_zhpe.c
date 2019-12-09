@@ -211,12 +211,12 @@ static int zhpe_lib_init(struct zhpeq_attr *attr)
     file = fopen(PLATFORM_PATH, "r");
     if (!file) {
         ret = -errno;
-        print_func_err(__func__, __LINE__, "fopen", PLATFORM_PATH, ret);
+        zhpeu_print_func_err(__func__, __LINE__, "fopen", PLATFORM_PATH, ret);
         goto done;
     }
     if (!fgets(platform, sizeof(platform), file)) {
         ret = -EIO;
-        print_func_err(__func__, __LINE__, "fgets", PLATFORM_PATH, ret);
+        zhpeu_print_func_err(__func__, __LINE__, "fgets", PLATFORM_PATH, ret);
         goto done;
     }
     if (!strcmp(platform, "carbon\n"))
@@ -612,7 +612,7 @@ static int zhpe_rq_epoll_add(struct zhpeq_rqi *rqi)
     epoll_irq[irq].qnum = qnum & ~(rqi->zrq.rqinfo.clump - 1);
     epoll_irq[irq].clump = rqi->zrq.rqinfo.clump;
 
-    fname = _zhpeu_asprintf("%s_poll_%u", DEV_NAME, irq);
+    fname = _zhpeu_asprintf("%s_poll_%u", DEV_PATH, irq);
     if (!fname) {
         ret = -ENOMEM;
         goto done;
@@ -1090,7 +1090,7 @@ static int zhpe_zmmu_reg(struct zhpeq_mr_desc_v1 *desc)
     return ret;
 }
 
-static int zhpe_fam_qkdata(struct zhpeq_dom *zdom, int open_idx,
+static int zhpe_fam_qkdata(struct zhpeq_domi *zdomi, int open_idx,
                            struct zhpeq_key_data **qkdata_out,
                            size_t *n_qkdata_out)
 {
@@ -1143,7 +1143,7 @@ static int zhpe_fam_qkdata(struct zhpeq_dom *zdom, int open_idx,
 
         desc->hdr.magic = ZHPE_MAGIC;
         desc->hdr.version = ZHPEQ_MR_V1REMOTE;
-        desc->hdr.zdom = zdom;
+        desc->hdr.zdomi = zdomi;
         desc->open_idx = open_idx;
         qkdata->z.vaddr = start[i];
         qkdata->z.zaddr = 0;
