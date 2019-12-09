@@ -208,7 +208,6 @@ static int do_mem_xchg(struct stuff *conn)
         zhpeq_print_qkdata(__func__, __LINE__, conn->rem_kdata);
 
  done:
-
     return ret;
 }
 
@@ -259,6 +258,7 @@ static int zxq_rma_op(struct zhpeq_xq *zxq, bool read, void *lcl_buf,
     struct op_context   ctxt = {
         .handler        = NULL,
     };
+    union zhpe_hw_wq_entry  *wqe;
 
     ret = zhpeq_xq_reserve(zxq);
     if (ret < 0) {
@@ -266,25 +266,26 @@ static int zxq_rma_op(struct zhpeq_xq *zxq, bool read, void *lcl_buf,
         goto done;
     }
     zhpeq_xq_set_context(zxq, ret, &ctxt);
+    wqe = zhpeq_xq_get_wqe(zxq, ret);
     if (read) {
         if (lcl_buf) {
             ctxt.handler = geti_handler;
             ctxt.data = lcl_buf;
             ctxt.len = len;
-            zhpeq_xq_geti(zxq, ret, 0, len, rem_zaddr);
+            zhpeq_xq_geti(wqe, 0, len, rem_zaddr);
         } else
-            zhpeq_xq_get(zxq, ret, 0, lcl_zaddr, len, rem_zaddr);
+            zhpeq_xq_get(wqe, 0, lcl_zaddr, len, rem_zaddr);
     } else if (lcl_buf)
-        zhpeq_xq_puti(zxq, ret, 0, lcl_buf, len, rem_zaddr);
+        memcpy(zhpeq_xq_puti(wqe, 0, len, rem_zaddr), lcl_buf, len);
     else
-        zhpeq_xq_put(zxq, ret, 0, lcl_zaddr, len, rem_zaddr);
+        zhpeq_xq_put(wqe, 0, lcl_zaddr, len, rem_zaddr);
     zhpeq_xq_insert(zxq, ret, false);
     zhpeq_xq_commit(zxq);
     while (!(ret = zxq_completions(zxq)));
     if (ret > 0 && !expected_saw("completions", 1, ret))
         ret = -EIO;
- done:
 
+ done:
     return ret;
 }
 
@@ -415,8 +416,8 @@ static int do_server_1op(struct stuff *conn, struct checker_data *data,
     /* Fill buffer for get. */
     ramp_buf(conn, data, false);
     ret = sock_send_blob(conn->sock_fd, &err_msg, sizeof(err_msg));
- done:
 
+ done:
     return ret;
 }
 
@@ -455,7 +456,6 @@ static int do_server_ops(struct stuff *conn)
     }
 
  done:
-
     return ret;
 }
 
@@ -464,7 +464,8 @@ static int do_client_1op(struct stuff *conn, struct checker_data *data,
 {
     int                 ret;
     uint8_t             *lcl_buf = (imm ? data->buf + data->op_msg.coff : NULL);
-    uint64_t            lcl_zaddr = conn->lcl_kdata->laddr + data->op_msg.coff;
+    uint64_t            lcl_zaddr = (conn->lcl_kdata->z.vaddr +
+                                     data->op_msg.coff);
     uint64_t            rem_zaddr = (conn->rem_kdata->z.zaddr +
                                      data->op_msg.soff);
     struct error_wire_msg err_msg;
@@ -509,8 +510,8 @@ static int do_client_1op(struct stuff *conn, struct checker_data *data,
         if (conn->args->stop)
             goto done;
     }
- done:
 
+ done:
     return ret;
 }
 
@@ -548,8 +549,8 @@ static int do_client_op(struct stuff *conn, size_t coff, size_t soff,
     ret = do_client_1op(conn, &data, false, data_err);
     if (!data.banner_done && conn->args->verbose)
         print_banner(&data, false);
- done:
 
+ done:
     return ret;
 }
 
@@ -762,6 +763,7 @@ static int do_client(const struct args *args)
             }
         }
     }
+
  err:
     /* Send zero length to cause server exit. */
     rc = do_client_op(&conn, 0, 0, 0, &data_err);
@@ -917,7 +919,7 @@ int main(int argc, char **argv)
         usage(false);
 
     ret = 0;
- done:
 
+ done:
     return ret;
 }

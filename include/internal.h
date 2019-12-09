@@ -124,6 +124,33 @@ struct zhpeq_domi {
     void                *backend_data;
 };
 
+struct zhpeq_rq_epolli {
+    struct zhpeq_rq_epoll zepoll;
+    void                *backend_data;
+    pthread_mutex_t     mutex;
+    int32_t             ref;
+};
+
+static inline void zhpeq_rq_epolli_get(struct zhpeq_rq_epolli *epolli)
+{
+    uint32_t            old MAYBE_UNUSED;
+
+    old = atm_inc(&epolli->ref);
+    assert(old >= 1);
+}
+
+void __zhpeq_rq_epolli_free(struct zhpeq_rq_epolli *epolli);
+
+static inline void zhpeq_rq_epolli_put(struct zhpeq_rq_epolli *epolli)
+{
+    uint32_t            old;
+
+    old = atm_dec(&epolli->ref);
+    assert(old >= 1);
+    if (old == 1)
+        __zhpeq_rq_epolli_free(epolli);
+}
+
 struct zhpeq_xqi {
     struct zhpeq_xq     zxq;
     void                *backend_data;
@@ -132,8 +159,10 @@ struct zhpeq_xqi {
 
 struct zhpeq_rqi {
     struct zhpeq_rq     zrq;
-    struct zhpeq_rqi    *next;
-    int                 poll_fd;
+    struct zhpeq_rq_epolli *epolli;
+    void                (*epoll_handler)(struct zhpeq_rq *zrq,
+                                         void *epoll_handler_data);
+    void                *epoll_handler_data;
     int                 dev_fd;
 };
 
@@ -187,6 +216,7 @@ struct zhpeq_mr_desc_common_hdr {
 struct zhpeq_mr_desc_v1 {
     struct zhpeq_mr_desc_common_hdr hdr;
     struct zhpeq_key_data qkdata;
+    uint64_t            rsp_zaddr;
     int                 open_idx;
 };
 

@@ -105,7 +105,6 @@ struct stuff {
     struct zhpeq_rq     *zrq;
     struct zhpeq_key_data *zxq_local_kdata;
     struct zhpeq_key_data *zxq_remote_kdata;
-    uint64_t            zxq_local_tx_zaddr;
     uint64_t            zxq_remote_rx_zaddr;
     int                 sock_fd;
     void                *tx_addr;
@@ -194,13 +193,6 @@ static int do_mem_setup(struct stuff *conn)
         print_func_err(__func__, __LINE__, "zhpeq_mr_reg", "", ret);
         goto done;
     }
-    ret = zhpeq_lcl_key_access(conn->zxq_local_kdata, conn->tx_addr,
-                               req, 0, &conn->zxq_local_tx_zaddr);
-    if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_lcl_key_access",
-                       "", ret);
-        goto done;
-    }
 
     req = sizeof(*conn->ring_timestamps) * args->ring_entries;
     ret = -posix_memalign((void **)&conn->ring_timestamps, page_size, req);
@@ -281,7 +273,6 @@ static int do_mem_xchg(struct stuff *conn)
     }
 
  done:
-
     return ret;
 }
 
@@ -346,10 +337,11 @@ static void random_rx_rcv(struct stuff *conn, struct rx_queue_head *rx_head)
     }
 }
 
-static int zxq_write(struct zhpeq_xq *zxq, const void *buf, uint64_t lcl_zaddr,
+static int zxq_write(struct zhpeq_xq *zxq, const void *buf,
                      size_t len, uint64_t rem_zaddr)
 {
     int32_t             ret;
+    union zhpe_hw_wq_entry *wqe;
 
     ret = zhpeq_xq_reserve(zxq);
     if (ret < 0) {
@@ -357,14 +349,15 @@ static int zxq_write(struct zhpeq_xq *zxq, const void *buf, uint64_t lcl_zaddr,
         goto done;
     }
     zhpeq_xq_set_context(zxq, ret, NULL);
+    wqe = zhpeq_xq_get_wqe(zxq, ret);
     if (len <= ZHPEQ_MAX_IMM)
-        zhpeq_xq_puti(zxq, ret, 0, buf, len, rem_zaddr);
+        memcpy(zhpeq_xq_puti(wqe, 0, len, rem_zaddr), buf, len);
     else
-        zhpeq_xq_put(zxq, ret, 0, lcl_zaddr, len, rem_zaddr);
+        zhpeq_xq_put(wqe, 0, (uintptr_t)buf, len, rem_zaddr);
     zhpeq_xq_insert(zxq, ret, false);
     zhpeq_xq_commit(zxq);
- done:
 
+ done:
     return ret;
 }
 
@@ -403,7 +396,6 @@ static int do_server_pong(struct stuff *conn)
     uint8_t             *tx_addr;
     volatile uint8_t    *rx_addr;
     uint8_t             tx_flag_new;
-    uint64_t            zxq_tx_addr;
     uint64_t            zxq_rx_addr;
 
     /* Create a random receive list for copy mode */
@@ -449,9 +441,8 @@ static int do_server_pong(struct stuff *conn)
               tx_off = next_roff(conn, tx_off))) {
             /* Reflect buffer to same offset in client.*/
             tx_addr = VPTR(conn->tx_addr, tx_off);
-            zxq_tx_addr = conn->zxq_local_tx_zaddr + tx_off;
             zxq_rx_addr = conn->zxq_remote_rx_zaddr + tx_off;
-            ret = zxq_write(conn->zxq, tx_addr, zxq_tx_addr,
+            ret = zxq_write(conn->zxq, tx_addr,
                             args->ring_entry_len, zxq_rx_addr);
             if (ret < 0)
                 goto done;
@@ -467,7 +458,6 @@ static int do_server_pong(struct stuff *conn)
     printf("%s:op_cnt/warmup %lu/%lu\n", appname, op_count, warmup_count);
 
  done:
-
     return ret;
 }
 
@@ -500,7 +490,6 @@ static int do_client_pong(struct stuff *conn)
     uint64_t            delta;
     uint64_t            start;
     uint64_t            now;
-    uint64_t            zxq_tx_addr;
     uint64_t            zxq_rx_addr;
 
     start = get_cycles(NULL);
@@ -579,7 +568,6 @@ static int do_client_pong(struct stuff *conn)
 
             /* Write buffer to same offset in server.*/
             tx_addr = VPTR(conn->tx_addr, tx_off);
-            zxq_tx_addr = conn->zxq_local_tx_zaddr + tx_off;
             zxq_rx_addr = conn->zxq_remote_rx_zaddr + tx_off;
             if (!tx_off)
                 tx_idx = 0;
@@ -588,7 +576,7 @@ static int do_client_pong(struct stuff *conn)
             /* Send data. */
             now = get_cycles(NULL);
             conn->ring_timestamps[tx_idx++] = now;
-            ret = zxq_write(conn->zxq, tx_addr, zxq_tx_addr,
+            ret = zxq_write(conn->zxq, tx_addr,
                             args->ring_entry_len, zxq_rx_addr);
             lat_write += get_cycles(NULL) - now;
             if (ret < 0)
@@ -650,7 +638,6 @@ static int do_client_unidir(struct stuff *conn)
     uint64_t            delta;
     uint64_t            start;
     uint64_t            now;
-    uint64_t            zxq_tx_addr;
     uint64_t            zxq_rx_addr;
 
     start = get_cycles(NULL);
@@ -701,12 +688,11 @@ static int do_client_unidir(struct stuff *conn)
 
         /* Write buffer to same offset in server.*/
         tx_addr = VPTR(conn->tx_addr, tx_off);
-        zxq_tx_addr = conn->zxq_local_tx_zaddr + tx_off;
         zxq_rx_addr = conn->zxq_remote_rx_zaddr + tx_off;
         /* Write op flag. */
         *tx_addr = tx_flag_out;
-        ret = zxq_write(conn->zxq, tx_addr, zxq_tx_addr, args->ring_entry_len,
-                       zxq_rx_addr);
+        ret = zxq_write(conn->zxq, tx_addr,
+                        args->ring_entry_len, zxq_rx_addr);
         now = get_cycles(NULL);
         lat_write += get_cycles(NULL) - now;
         if (ret < 0)
@@ -901,7 +887,7 @@ static int do_server(const struct args *args)
         ret = do_server_one(args, conn_fd);
     }
 
-done:
+ done:
     if (listener_fd != -1)
         close(listener_fd);
     if (resp)
@@ -1141,7 +1127,7 @@ int main(int argc, char **argv)
         usage(false);
 
     ret = 0;
- done:
 
+ done:
     return ret;
 }

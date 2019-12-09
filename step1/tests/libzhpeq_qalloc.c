@@ -167,6 +167,7 @@ static int qcm_ok(volatile void *qcm, struct zhpe_xqinfo *info, size_t i,
     if (!zhpe && !pages_ok("qcm", qcm, info->qcm.off, info->qcm.size, zero))
         goto done;
     ret = true;
+
  done:
     return ret;
 }

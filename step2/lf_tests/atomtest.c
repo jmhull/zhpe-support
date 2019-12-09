@@ -93,6 +93,10 @@ union ucontext {
     union ucontext      *next;
 };
 
+static void free_dummy(void *ptr)
+{
+}
+
 struct stuff {
     const struct args   *args;
     struct fab_dom      *fab_dom;
@@ -112,7 +116,11 @@ struct stuff {
     uint64_t            ops_done;
     uint64_t            expected_cli;
     uint64_t            expected_hw;
-    bool                allocated;
+    /*
+     * Obfuscation: gcc 9.2 is overly aggressive in detecting frees of
+     * non-heap memory. I don't know how to tell it to stop.
+     */
+    void                (*free_me)(void *ptr);
     bool                server;
 };
 
@@ -186,8 +194,8 @@ static struct context *ctx_next(struct stuff *conn)
         goto done;
     conn->ctx_free = uctx->next;
     conn->ctx_cur--;
- done:
 
+ done:
     return ret;
 }
 
@@ -208,8 +216,7 @@ static void stuff_free(struct stuff *stuff)
 
     FD_CLOSE(stuff->sock_fd);
 
-    if (stuff->allocated)
-        free(stuff);
+    stuff->free_me(stuff);
 }
 
 static int do_mem_setup(struct stuff *conn)
@@ -425,8 +432,8 @@ static int cli_atomic(struct stuff *conn,
         conn->ops_done++;
     else if (ctx)
         ctx_free(conn, ctx);
- done:
 
+ done:
     return ret;
 }
 
@@ -452,8 +459,8 @@ static int cli_atomic_original(struct stuff *conn,
         goto done;
 
     ret = zhpeu_fab_atomic_load(type, &orig, original);
- done:
 
+ done:
     return ret;
 }
 
@@ -531,8 +538,8 @@ static int do_server_sum(struct stuff *conn)
         goto done;
     }
     ret = do_wait_all(conn);
- done:
 
+ done:
     return ret;
 }
 
@@ -648,7 +655,6 @@ static int cli_atomic_size_test1(struct stuff *conn, enum fi_op op,
     ret = 0;
 
  done:
-
     return ret;
 }
 
@@ -698,7 +704,6 @@ static int cli_atomic_size_test(struct stuff *conn, enum fi_op op,
     }
 
  done:
-
     return ret;
 }
 
@@ -782,8 +787,8 @@ static int cli_atomic_size_tests(struct stuff *conn)
         ret = -FI_EINVAL;
         goto done;
     }
- done:
 
+ done:
     return ret;
 }
 
@@ -830,8 +835,8 @@ static int do_client_sum(struct stuff *conn)
         op_cnt++;
     }
     ret = update_error(ret, do_wait_all(conn));
- done:
 
+ done:
     return ret;
 }
 
@@ -954,8 +959,8 @@ static int do_client_sum_check(struct stuff *conn[], const struct args *args)
         goto done;
     print_info("okay\n");
     ret = 0;
- done:
 
+ done:
     return ret;
 }
 
@@ -971,6 +976,7 @@ static int do_server_one(const struct args *oargs, int conn_fd)
         .dest_av        = FI_ADDR_UNSPEC,
         .server         = true,
         .fab_dom        = &fab_dom_lcl,
+        .free_me        = free_dummy,
     };
     struct stuff        *conn = &conn_lcl;
     struct fab_dom      *fab_dom = conn->fab_dom;
@@ -1169,7 +1175,7 @@ static int do_client(const struct args *args)
         conn[i]->sock_fd = -1;
         conn[i]->dest_av = FI_ADDR_UNSPEC;
         conn[i]->threadidx = i;
-        conn[i]->allocated = true;
+        conn[i]->free_me = free;
         conn[i]->fab_dom = &cli_fab_dom0;
         if (i == 0)
             fab_dom_init(&cli_fab_dom0);
@@ -1208,8 +1214,8 @@ static int do_client(const struct args *args)
     for (i = 0; i < args->threads; i++)
         stuff_free(conn[i]);
     ret = 0;
- done:
 
+ done:
     return ret;
 }
 
@@ -1305,7 +1311,7 @@ int main(int argc, char **argv)
         usage(false);
 
     ret = 0;
- done:
 
+ done:
     return ret;
 }

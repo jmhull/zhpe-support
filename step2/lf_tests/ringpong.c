@@ -123,7 +123,6 @@ struct stuff {
     size_t              tx_avail;
     uint64_t            remote_key;
     uint64_t            remote_addr;
-    bool                allocated;
 };
 
 static inline size_t next_roff(struct stuff *conn, size_t cur)
@@ -160,9 +159,6 @@ static void stuff_free(struct stuff *stuff)
     free(stuff->ctx);
 
     FD_CLOSE(stuff->sock_fd);
-
-    if (stuff->allocated)
-        free(stuff);
 }
 
 static int do_mem_setup(struct stuff *conn)
@@ -434,7 +430,6 @@ static int do_server_pong(struct stuff *conn)
     printf("%s:op_cnt/warmup %lu/%lu\n", appname, op_count, warmup_count);
 
  done:
-
     return ret;
 }
 
@@ -636,7 +631,6 @@ static int do_server_sink(struct stuff *conn)
     fab_print_info(fab_conn);
 
  done:
-
     return ret;
 }
 
@@ -1203,7 +1197,7 @@ int main(int argc, char **argv)
         usage(false);
 
     ret = 0;
- done:
 
+ done:
     return ret;
 }

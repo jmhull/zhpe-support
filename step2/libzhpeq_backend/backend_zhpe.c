@@ -85,11 +85,15 @@ struct zhpe_rq_epoll_irq {
     uint16_t            count;
 };
 
-static pthread_mutex_t  epoll_mutex = PTHREAD_MUTEX_INITIALIZER;
-static struct zhpeq_rqi *epoll_rqi[ZHPE_MAX_RDMQS];
-static struct zhpe_rq_epoll_irq epoll_irq[ZHPE_MAX_IRQS];
-static int              epoll_fd = -1;
-static int              epoll_pipe_fds[2] = { -1, -1 };
+struct zepoll_data {
+    struct zhpeq_rqi    *rqi[ZHPE_MAX_RDMQS];
+    struct zhpeq_rqi    *act[ZHPE_MAX_RDMQS];
+    struct zhpe_rq_epoll_irq irq[ZHPE_MAX_IRQS];
+    int                 fd;
+    int                 pipe_fds[2];
+};
+
+#define BEPOLL_RQI_DISABLED     ((struct zhpeq_rqi *)1)
 
 struct zdom_data {
     pthread_mutex_t     node_mutex;
@@ -147,7 +151,6 @@ static int __driver_cmd(union zhpe_op *op, size_t req_len, size_t rsp_len,
                         strerror(-ret));
 
  done:
-
     return ret;
 }
 
@@ -230,6 +233,7 @@ static int zhpe_lib_init(struct zhpeq_attr *attr)
         goto done;
     }
     ret = 0;
+
  done:
     if (file)
         fclose(file);
@@ -328,8 +332,8 @@ static int zhpe_domain(struct zhpeq_domi *zdomi)
         goto done;
     mutex_init(&bdom->node_mutex, NULL);
     ret = 0;
- done:
 
+ done:
     return ret;
 }
 
@@ -372,8 +376,8 @@ static int zhpe_xq_alloc(struct zhpeq_xqi *xqi, int wqlen, int cqlen,
         goto done;
     xqi->dev_fd = dev_fd;
     xqi->zxq.xqinfo = rsp->xqalloc.info;
- done:
 
+ done:
     return ret;
 }
 
@@ -496,56 +500,6 @@ static int zhpe_xq_close(struct zhpeq_xqi *xqi, int open_idx)
     return ret;
 }
 
-static int zhpe_rq_epoll_deinit(void)
-{
-    int                 ret = 0;
-
-    ret = zhpeu_update_error(ret, FD_CLOSE(epoll_fd));
-    ret = zhpeu_update_error(ret, FD_CLOSE(epoll_pipe_fds[0]));
-    ret = zhpeu_update_error(ret, FD_CLOSE(epoll_pipe_fds[1]));
-
-    return ret;
-}
-
-static int zhpe_rq_epoll_init(void)
-{
-    int                 ret = -EEXIST;
-    struct epoll_event  pipe_event = {
-        .events         = EPOLLIN,
-        .data.u64       = ZHPE_MAX_IRQS,
-    };
-
-    if (epoll_fd != -1)
-        goto done;
-
-    if ((ret = epoll_create1(EPOLL_CLOEXEC)) == -1) {
-        ret = -errno;
-        zhpeu_print_func_err(__func__, __LINE__, "epoll_create1", "", ret);
-        goto done;
-    }
-    epoll_fd = ret;
-
-    if (pipe2(epoll_pipe_fds, O_CLOEXEC | O_NONBLOCK) == -1) {
-        ret = -errno;
-        epoll_pipe_fds[0] = -1;
-        epoll_pipe_fds[1] = -1;
-        zhpeu_print_func_err(__func__, __LINE__, "pipe2", "", ret);
-        goto done;
-    }
-
-    ret = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, epoll_pipe_fds[0], &pipe_event);
-    if (ret == -1) {
-        ret = -errno;
-        zhpeu_print_func_err(__func__, __LINE__, "epoll_ctl", "ADD", ret);
-        goto done;
-    }
- done:
-    if (ret < 0)
-        (void)zhpe_rq_epoll_deinit();
-
-    return ret;
-}
-
 static inline uint rqi_irq(struct zhpeq_rqi *rqi)
 {
     return rqi->zrq.rqinfo.irq_vector;
@@ -558,92 +512,6 @@ static inline uint rqi_qnum(struct zhpeq_rqi *rqi)
     return ZHPE_MAX_RDMQS_PER_SLICE * rqinfo->slice + rqinfo->queue;
 }
 
-static int zhpe_rq_epoll_del(struct zhpeq_rqi *rqi)
-{
-    int                 ret = 0;
-    uint32_t            irq = rqi_irq(rqi);
-    uint32_t            qnum = rqi_qnum(rqi);
-    struct zhpeq_rqi    *rqi_old = rqi;
-
-    mutex_lock(&epoll_mutex);
-
-    (void)atm_cmpxchg(&epoll_rqi[qnum], &rqi_old, NULL);
-
-    if (--(epoll_irq[irq].count))
-        goto done;
-
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, epoll_irq[irq].fd, NULL) == -1) {
-        ret = -errno;
-        zhpeu_print_func_err(__func__, __LINE__, "epoll_ctl", "DEL", -errno);
-    }
- done:
-
-    mutex_unlock(&epoll_mutex);
-
-    return ret;
-}
-
-static int zhpe_rq_epoll_add(struct zhpeq_rqi *rqi)
-{
-    int                 ret = -EEXIST;
-    uint32_t            irq = rqi_irq(rqi);
-    uint32_t            qnum = rqi_qnum(rqi);
-    struct zhpeq_rqi    *rqi_old = NULL;
-    char                *fname = NULL;
-    struct epoll_event  poll_event = {
-        .events         = EPOLLIN,
-        .data.u64       = irq,
-    };
-
-    mutex_lock(&epoll_mutex);
-
-    if (epoll_fd == -1 && (ret = zhpe_rq_epoll_init()) < 0)
-        goto done;
-
-    if (!atm_cmpxchg(&epoll_rqi[qnum], &rqi_old, rqi)) {
-        /* Should never happen. */
-        abort();
-    }
-
-    ret = 0;
-    if (epoll_irq[irq].count++)
-        goto done;
-
-    epoll_irq[irq].qnum = qnum & ~(rqi->zrq.rqinfo.clump - 1);
-    epoll_irq[irq].clump = rqi->zrq.rqinfo.clump;
-
-    fname = _zhpeu_asprintf("%s_poll_%u", DEV_PATH, irq);
-    if (!fname) {
-        ret = -ENOMEM;
-        goto done;
-    }
-    epoll_irq[irq].fd = open(fname, O_RDONLY);
-    if (epoll_irq[irq].fd == -1) {
-        ret = -errno;
-        zhpeu_print_func_err(__func__, __LINE__, "open", fname, ret);
-        goto done;
-    }
-    ret = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, epoll_irq[irq].fd, &poll_event);
-    if (ret == -1) {
-        ret = -errno;
-        zhpeu_print_func_err(__func__, __LINE__, "epoll_ctl", "ADD", ret);
-        goto done;
-    }
-    ret = 0;
- done:
-
-    if (ret < 0) {
-        if (fname) {
-            free(fname);
-            FD_CLOSE(epoll_irq[irq].fd);
-        }
-        epoll_irq[irq].count--;
-    }
-    mutex_unlock(&epoll_mutex);
-
-    return ret;
-}
-
 static int zhpe_rq_free(struct zhpeq_rqi *rqi)
 {
 
@@ -653,7 +521,6 @@ static int zhpe_rq_free(struct zhpeq_rqi *rqi)
     union zhpe_rsp      *rsp = &op.rsp;
     int                 rc;
 
-    ret = zhpeu_update_error(ret, zhpe_rq_epoll_del(rqi));
     req->hdr.opcode = ZHPE_OP_RQFREE;
     req->rqfree.info = rqi->zrq.rqinfo;
     rc = driver_cmd(&op, sizeof(req->rqfree), sizeof(rsp->rqfree), true);
@@ -677,55 +544,119 @@ static int zhpe_rq_alloc(struct zhpeq_rqi *rqi, int rqlen, int slice_mask)
         goto done;
     rqi->dev_fd = dev_fd;
     rqi->zrq.rqinfo = rsp->rqalloc.info;
-    ret = zhpe_rq_epoll_add(rqi);
+
  done:
+    return ret;
+}
+
+static int zhpe_rq_epoll_free(struct zhpeq_rq_epolli *epolli)
+{
+    int                 ret = 0;
+    struct zepoll_data  *bepoll;
+    size_t              i;
+
+    mutex_lock(&epolli->mutex);
+    bepoll = epolli->backend_data;
+    if (!bepoll) {
+        mutex_unlock(&epolli->mutex);
+        goto done;
+    }
+    epolli->backend_data = NULL;
+
+    ret = zhpeu_update_error(ret, FD_CLOSE(bepoll->fd));
+    for (i = 0; i < ARRAY_SIZE(bepoll->irq); i++)
+        ret = zhpeu_update_error(ret, FD_CLOSE(bepoll->irq[i].fd));
+    ret = zhpeu_update_error(ret, FD_CLOSE(bepoll->pipe_fds[0]));
+    ret = zhpeu_update_error(ret, FD_CLOSE(bepoll->pipe_fds[1]));
+    free(bepoll);
+    mutex_unlock(&epolli->mutex);
+    zhpeq_rq_epolli_put(epolli);
+
+ done:
+    return ret;
+}
+
+static int zhpe_rq_epoll_alloc(struct zhpeq_rq_epolli *epolli)
+{
+    int                 ret = -ENOMEM;
+    struct zepoll_data  *bepoll;
+    struct epoll_event  pipe_event = {
+        .events         = EPOLLIN,
+        .data.u64       = ZHPE_MAX_IRQS,
+    };
+    size_t              i;
+
+    bepoll = calloc_cachealigned(1, sizeof(*bepoll));
+    if (!bepoll)
+        goto done;
+    epolli->backend_data = bepoll;
+    bepoll->fd = -1;
+    bepoll->pipe_fds[0] = -1;
+    bepoll->pipe_fds[1] = -1;
+    for (i = 0; i < ARRAY_SIZE(bepoll->irq); i++)
+        bepoll->irq[i].fd = -1;
+
+    if ((bepoll->fd = epoll_create1(EPOLL_CLOEXEC)) == -1) {
+        ret = -errno;
+        zhpeu_print_func_err(__func__, __LINE__, "epoll_create1", "", ret);
+        goto done;
+    }
+
+    if (pipe2(bepoll->pipe_fds, O_CLOEXEC | O_NONBLOCK) == -1) {
+        ret = -errno;
+        bepoll->pipe_fds[0] = -1;
+        bepoll->pipe_fds[1] = -1;
+        zhpeu_print_func_err(__func__, __LINE__, "pipe2", "", ret);
+        goto done;
+    }
+
+    ret = epoll_ctl(bepoll->fd, EPOLL_CTL_ADD, bepoll->pipe_fds[0],
+                    &pipe_event);
+    if (ret == -1) {
+        ret = -errno;
+        zhpeu_print_func_err(__func__, __LINE__, "epoll_ctl", "ADD", ret);
+        goto done;
+    }
+
+ done:
+    if (ret < 0)
+        (void)zhpe_rq_epoll_free(epolli);
 
     return ret;
 }
 
-static bool zhpe_rq_epoll_enable(struct zhpeq_rqi *rqi)
-{
-    uint32_t            qnum = rqi_qnum(rqi);
-    struct zhpeq_rqi    *rqi_old = NULL;
-
-    return atm_cmpxchg(&epoll_rqi[qnum], &rqi_old, rqi);
-}
-
-static bool zhpe_rq_epoll_disable(struct zhpeq_rqi *rqi)
-{
-    uint32_t            qnum = rqi_qnum(rqi);
-
-    return atm_cmpxchg(&epoll_rqi[qnum], &rqi, NULL);
-}
-
-static int do_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
-                       int (*zrq_ready)(void *varg, struct zhpeq_rq *zrq),
-                       void *varg)
+static int zhpe_rq_epoll(struct zhpeq_rq_epolli *epolli,
+                         int timeout_ms, const sigset_t *sigmask, bool eintr_ok)
 {
     int                 ret;
+    struct zepoll_data  *bepoll = epolli->backend_data;
+    uint32_t            n_act = 0;
     uint32_t            irq;
     uint32_t            evts;
     uint32_t            i;
     struct zhpeq_rqi    *rqi;
-    int                 nevents;
+    int                 n_events;
     struct epoll_event  events[ZHPE_MAX_IRQS];
     char                pipe_buf[32];
 
-    ret = epoll_pwait(epoll_fd, events, ARRAY_SIZE(events),
+    ret = epoll_pwait(bepoll->fd, events, ARRAY_SIZE(events),
                       timeout_ms, sigmask);
     if (ret == -1) {
         ret = -errno;
-        if (ret != -EINTR || !eintr_ok)
-            zhpeu_print_func_err(__func__, __LINE__, "epoll", "", ret);
+        if (ret == -EINTR && eintr_ok) {
+            ret = 0;
+            goto done;
+        }
+        zhpeu_print_func_err(__func__, __LINE__, "epoll", "", ret);
         goto done;
     }
 
     /* Protect against zrqs being deleted. */
-    mutex_lock(&epoll_mutex);
+    mutex_lock(&epolli->mutex);
 
-    nevents = ret;
+    n_events = ret;
     ret = 0;
-    for (i = 0; i < nevents; i++) {
+    for (i = 0; i < n_events; i++) {
         irq = events[i].data.u64;
         evts = events[i].events;
         if (evts & ~EPOLLIN) {
@@ -736,59 +667,147 @@ static int do_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
         }
         if (irq >= ZHPE_MAX_IRQS) {
             /* Pipe: just used to wake us up, empty it. */
-            (void)read(epoll_pipe_fds[0], pipe_buf, sizeof(pipe_buf));
+            (void)read(bepoll->pipe_fds[0], pipe_buf, sizeof(pipe_buf));
             continue;
         }
         atm_store(&shared_local->handled_counter[irq],
                   atm_load(&shared_global->triggered_counter[irq]));
 
-        for (i = epoll_irq[irq].qnum;
-             i < epoll_irq[irq].qnum + epoll_irq[irq].clump; i++) {
-            rqi = atm_load_rlx(&epoll_rqi[i]);
-            if (!rqi)
+        for (i = bepoll->irq[irq].qnum;
+             i < bepoll->irq[irq].qnum + bepoll->irq[irq].clump; i++) {
+            rqi = atm_load_rlx(&bepoll->rqi[i]);
+            if (!rqi || rqi == BEPOLL_RQI_DISABLED)
                 continue;
             /* Is the current head valid? */
             if (!zhpeq_rq_entry(&rqi->zrq))
                 /* No. */
                 continue;
-            /* A queue has a valid entry. Disable poll checks. */
-            if (!atm_cmpxchg(&epoll_rqi[i], &rqi, NULL))
+            /* Disable events for this queue. */
+            if (!atm_cmpxchg(&bepoll->rqi[i], &rqi, BEPOLL_RQI_DISABLED))
+                /* Race lost with zhpe_rq_epoll_enable(). */
                 continue;
-            /* Lock succeeded, call zrq_ready(). */
-            ret = zrq_ready(varg, &rqi->zrq);
-            if (ret < 0)
-                goto done_locked;
+            bepoll->act[n_act++] = rqi;
         }
     }
+
  done_locked:
+    mutex_unlock(&epolli->mutex);
 
-    mutex_unlock(&epoll_mutex);
- done:
-
-    return ret;
-}
-
-static int zhpe_rq_epoll(int timeout_ms, const sigset_t *sigmask, bool eintr_ok,
-                         int (*zrq_ready)(void *varg, struct zhpeq_rq *zrq),
-                         void *varg)
-{
-    int                 ret;
-
-    for (;;) {
-        ret = do_rq_epoll(timeout_ms, sigmask, eintr_ok, zrq_ready, varg);
-        if (ret || timeout_ms != -1)
-            break;
+    /* Run handlers for all activated queues. */
+    for (i = 0; i < n_act; i++) {
+        rqi = bepoll->act[i];
+        rqi->epoll_handler(&rqi->zrq, rqi->epoll_handler_data);
     }
 
+ done:
+    return (ret < 0 ? ret : n_act);
+}
+
+static int zhpe_rq_epoll_add(struct zhpeq_rq_epolli *epolli,
+                             struct zhpeq_rqi *rqi, bool disabled)
+{
+    int                 ret = -EEXIST;
+    struct zepoll_data  *bepoll = epolli->backend_data;
+    uint32_t            irq = rqi_irq(rqi);
+    uint32_t            qnum = rqi_qnum(rqi);
+    char                *fname = NULL;
+    struct epoll_event  poll_event = {
+        .events         = EPOLLIN,
+        .data.u64       = irq,
+    };
+
+    mutex_lock(&epolli->mutex);
+
+    if (rqi->epolli || bepoll->rqi[qnum])
+        goto done;
+
+    if (bepoll->irq[irq].count)
+        goto hold;
+
+    bepoll->irq[irq].qnum = qnum & ~(rqi->zrq.rqinfo.clump - 1);
+    bepoll->irq[irq].clump = rqi->zrq.rqinfo.clump;
+
+    fname = _zhpeu_asprintf("%s_poll_%u", DEV_PATH, irq);
+    if (!fname) {
+        ret = -ENOMEM;
+        goto done;
+    }
+    bepoll->irq[irq].fd = open(fname, O_RDONLY);
+    if (bepoll->irq[irq].fd == -1) {
+        ret = -errno;
+        zhpeu_print_func_err(__func__, __LINE__, "open", fname, ret);
+        goto done;
+    }
+    ret = epoll_ctl(bepoll->fd, EPOLL_CTL_ADD, bepoll->irq[irq].fd,
+                    &poll_event);
+    if (ret == -1) {
+        ret = -errno;
+        zhpeu_print_func_err(__func__, __LINE__, "epoll_ctl", "ADD", ret);
+        goto done;
+    }
+
+ hold:
+    rqi->epolli = epolli;
+    zhpeq_rq_epolli_get(epolli);
+    if (disabled)
+        bepoll->rqi[qnum] = BEPOLL_RQI_DISABLED;
+    else
+        bepoll->rqi[qnum] = rqi;
+    bepoll->irq[irq].count++;
+    ret = 0;
+
+ done:
+    if (ret < 0) {
+        if (fname) {
+            free(fname);
+            FD_CLOSE(bepoll->irq[irq].fd);
+        }
+    }
+    mutex_unlock(&epolli->mutex);
+
     return ret;
 }
 
-int zhpe_rq_epoll_signal(void)
+static int zhpe_rq_epoll_del(struct zhpeq_rqi *rqi)
 {
     int                 ret = 0;
+    struct zhpeq_rq_epolli *epolli = rqi->epolli;
+    struct zepoll_data  *bepoll;
+    uint32_t            irq = rqi_irq(rqi);
+    uint32_t            qnum = rqi_qnum(rqi);
+
+    mutex_lock(&epolli->mutex);
+    bepoll = epolli->backend_data;
+    if (!bepoll || !bepoll->rqi[qnum]) {
+        mutex_unlock(&epolli->mutex);
+        goto done;
+    }
+    bepoll->rqi[qnum] = NULL;
+    rqi->epolli = NULL;
+
+    if (--(bepoll->irq[irq].count))
+        goto drop;
+
+    if (epoll_ctl(bepoll->fd, EPOLL_CTL_DEL, bepoll->irq[irq].fd, NULL) == -1) {
+        ret = -errno;
+        zhpeu_print_func_err(__func__, __LINE__, "epoll_ctl", "DEL", -errno);
+    }
+
+ drop:
+    mutex_unlock(&epolli->mutex);
+    zhpeq_rq_epolli_put(epolli);
+
+ done:
+    return ret;
+}
+
+int zhpe_rq_epoll_signal(struct zhpeq_rq_epolli *epolli)
+{
+    int                 ret = 0;
+    struct zepoll_data  *bepoll = epolli->backend_data;
     char                buf[1] = { 0 };
 
-    if (write(epoll_pipe_fds[1], buf, sizeof(buf)) == -1) {
+    if (write(bepoll->pipe_fds[1], buf, sizeof(buf)) == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
             ret = -errno;
             zhpeu_print_func_err(__func__, __LINE__, "write", "", ret);
@@ -796,6 +815,37 @@ int zhpe_rq_epoll_signal(void)
     }
 
     return ret;
+}
+
+static bool zhpe_rq_epoll_enable(struct zhpeq_rqi *rqi, uint64_t *last,
+                                 uint64_t now)
+{
+    struct zepoll_data  *bepoll = rqi->epolli->backend_data;
+    struct zhpeq_rqi    *rqi_old = BEPOLL_RQI_DISABLED;
+    uint32_t            qmask = rqi->zrq.rqinfo.cmplq.ent - 1;
+    uint32_t            qnum = rqi_qnum(rqi);
+
+    /* Try to enable the queue in epoll. */
+    if (!atm_cmpxchg(&bepoll->rqi[qnum], &rqi_old, rqi))
+        return false;
+
+    /* Update head so interrupts can occur. */
+    __zhpeq_rq_last_update(&rqi->zrq, last, now);
+    __zhpeq_rq_head_update(&rqi->zrq, rqi->zrq.head, true);
+    /* Did we race with a final delivery? */
+    if (!zhpeq_rq_entry(&rqi->zrq) &&
+        ((qcmread64(rqi->zrq.qcm,
+                    ZHPE_RDM_QCM_RCV_QUEUE_TAIL_TOGGLE_OFFSET) & qmask) ==
+         (rqi->zrq.head & qmask)))
+        /* No. */
+        return true;
+    /* Yes: disable queue. */
+    rqi_old = rqi;
+    if (!atm_cmpxchg(&bepoll->rqi[qnum], &rqi_old, BEPOLL_RQI_DISABLED))
+        /* Race lost with zhpe_rq_epoll(), event generated. */
+        return true;
+
+    return false;
 }
 
 static int compare_qkdata(const void *key1, const void *key2)
@@ -897,7 +947,6 @@ static int zhpe_mr_reg(struct zhpeq_domi *zdomi,
     desc->hdr.version = ZHPEQ_MR_V1 | ZHPEQ_MR_VREG;
     desc->hdr.zdomi = zdomi;
     qkdata->z.vaddr = (uintptr_t)buf;
-    qkdata->laddr = (uintptr_t)buf;
     qkdata->z.len = len;
     qkdata->z.access = access;
 
@@ -1070,7 +1119,7 @@ static int zhpe_zmmu_reg(struct zhpeq_mr_desc_v1 *desc)
         mutex_lock(&bdom->node_mutex);
         if (!node->big_req_zaddr)
             ret = do_rmr_import(node->uue->uuid,
-                                qkdata->rsp_zaddr - qkdata->z.vaddr,
+                                desc->rsp_zaddr - qkdata->z.vaddr,
                                 BIG_ZMMU_LEN, BIG_ZMMU_REQ_FLAGS,
                                 &node->big_req_zaddr, NULL);
         else
@@ -1081,8 +1130,9 @@ static int zhpe_zmmu_reg(struct zhpeq_mr_desc_v1 *desc)
         }
         mutex_unlock(&bdom->node_mutex);
     } else
-        ret = do_rmr_import(node->uue->uuid, qkdata->rsp_zaddr, qkdata->z.len,
+        ret = do_rmr_import(node->uue->uuid, desc->rsp_zaddr, qkdata->z.len,
                             qkdata->z.access, &qkdata->z.zaddr, NULL);
+
  done:
     if (ret >= 0)
         desc->hdr.version |= ZHPEQ_MR_VREG;
@@ -1147,13 +1197,13 @@ static int zhpe_fam_qkdata(struct zhpeq_domi *zdomi, int open_idx,
         desc->open_idx = open_idx;
         qkdata->z.vaddr = start[i];
         qkdata->z.zaddr = 0;
-        qkdata->rsp_zaddr = start[i];
+        desc->rsp_zaddr = start[i];
         qkdata->z.len = len[i];
-        qkdata->z.access = (ZHPEQ_MR_GET_REMOTE | ZHPEQ_MR_PUT_REMOTE |
-                            ZHPEQ_MR_KEY_ZERO_OFF);
+        qkdata->z.access = (ZHPEQ_MR_GET_REMOTE | ZHPEQ_MR_PUT_REMOTE);
         qkdata_out[i] = qkdata;
     }
     ret = 0;
+
  done:
     if (ret == -ENOMEM) {
         for (i = 0; i < *n_qkdata_out; i++) {
@@ -1180,7 +1230,7 @@ static int zhpe_zmmu_free(struct zhpeq_mr_desc_v1 *desc)
             node->big_req_cnt--;
             if (!node->big_req_cnt) {
                 ret = do_rmr_free(node->uue->uuid,
-                                  qkdata->rsp_zaddr - qkdata->z.vaddr,
+                                  desc->rsp_zaddr - qkdata->z.vaddr,
                                   BIG_ZMMU_LEN, BIG_ZMMU_REQ_FLAGS,
                                   node->big_req_zaddr);
                 if (ret < 0 && ret != -ENOENT)
@@ -1193,7 +1243,7 @@ static int zhpe_zmmu_free(struct zhpeq_mr_desc_v1 *desc)
             ret = -ENOENT;
         mutex_unlock(&bdom->node_mutex);
     } else
-        ret = do_rmr_free(node->uue->uuid, qkdata->rsp_zaddr,
+        ret = do_rmr_free(node->uue->uuid, desc->rsp_zaddr,
                           qkdata->z.len, qkdata->z.access, qkdata->z.zaddr);
 
  done:
@@ -1224,10 +1274,10 @@ static int zhpe_mmap(const struct zhpeq_mr_desc_v1 *desc_orig,
     zmdesc->qkdata = qkdata;
     qkdata->z.vaddr += offset;
     qkdata->z.len -= offset;
-    qkdata->rsp_zaddr += offset;
+    desc->rsp_zaddr += offset;
     qkdata->z.access |= cache_mode | ZHPEQ_MR_REQ_CPU | ZHPE_MR_INDIVIDUAL;
 
-    ret = do_rmr_import(node->uue->uuid, qkdata->rsp_zaddr, qkdata->z.len,
+    ret = do_rmr_import(node->uue->uuid, desc->rsp_zaddr, qkdata->z.len,
                         qkdata->z.access, &qkdata->z.zaddr, &pgoff);
     if (ret < 0) {
         qkdata->z.zaddr = 0;
@@ -1334,8 +1384,8 @@ static char *zhpe_qkdata_id_str(const struct zhpeq_mr_desc_v1 *desc)
 
     uuid_unparse_upper(bdom->nodes[desc->open_idx].uue->uuid, uuid_str);
     ret = zhpeu_asprintf(ret, "%d %s", desc->open_idx, uuid_str);
- done:
 
+ done:
     return ret;
 }
 
