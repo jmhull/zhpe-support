@@ -102,26 +102,8 @@ enum zhpeq_atomic_op {
 #define	ZHPEQ_HOSTS_FILE	"/etc/hosts.zhpeq"
 #define	ZHPEQ_HOSTS_ENV         "ZHPEQ_HOSTS"
 
-#define __IMPORT(_x)                                            \
-    ZHPEQ_XQ_CQ_STATUS_##_x = ZHPE_HW_CQ_STATUS_##_x
-
-enum zhpeq_xq_cq_status {
-    __IMPORT(SUCCESS),
-    __IMPORT(XDM_PUT_READ_ERROR),
-    __IMPORT(XDM_BAD_COMMAND),
-    __IMPORT(GENZ_UNSUPPORTED_REQ),
-    __IMPORT(GENZ_MALFORMED_PKT),
-    __IMPORT(GENZ_PKT_EXECUTION_ERROR),
-    __IMPORT(GENZ_INVALID_PERMISSION),
-    __IMPORT(GENZ_COMP_CONTAINMENT),
-    __IMPORT(GENZ_RDM_QUEUE_FULL),
-    __IMPORT(GENZ_UNSUPPORTED_SVC),
-    __IMPORT(GENZ_RETRIES_EXCEEDED),
-};
-
-#undef __IMPORT
-
 enum zhpeq_backend {
+    ZHPEQ_BACKEND_NONE,
     ZHPEQ_BACKEND_ZHPE,
     ZHPEQ_BACKEND_LIBFABRIC,
     ZHPEQ_BACKEND_MAX,
@@ -141,7 +123,11 @@ struct zhpeq_attr {
 
 struct zhpeq_key_data {
     struct zhpe_key_data z;
-    void                *cache;
+    struct zhpeq_dom    *zqdom;
+    void                *cache_entry;
+    void                (*ready)(struct zhpeq_key_data *qkdata,
+                                 void *ready_data);
+    void                *ready_data;
 };
 
 /* Public portions of structures. */
@@ -161,13 +147,18 @@ struct zhpeq_rq_epoll {
 #define ZHPEQ_BITMAP_BITS       (64U)
 #define ZHPEQ_BITMAP_SHIFT      (6U)
 
-struct zhpeq_xq {
-    struct zhpeq_dom    *zdom;
-    struct zhpe_xqinfo  xqinfo;
+struct zhpeq_tq;
+
+typedef void (*zhpeq_tq_entry_insert_fn)(struct zhpeq_tq *ztq,
+                                         uint16_t reservation16);
+struct zhpeq_tq {
+    struct zhpeq_dom    *zqdom;
+    struct zhpe_xqinfo  tqinfo;
     void                *qcm;
     union zhpe_hw_wq_entry *cmd;
     union zhpe_hw_wq_entry *wq;
     union zhpe_hw_cq_entry *cq;
+    zhpeq_tq_entry_insert_fn insert_hook;
     uint64_t            *free_bitmap;
     void                **ctx;
     union zhpe_hw_wq_entry *mem;
@@ -176,19 +167,20 @@ struct zhpeq_xq {
     uint32_t            cq_head;
 };
 
-typedef void (*zhpeq_xq_entry_insert_fn)(struct zhpeq_xq *zxq,
-                                         uint16_t reservation16);
-enum zhpeq_insert_idx {
+enum {
     ZHPEQ_INSERT_CMD    = 0,
     ZHPEQ_INSERT_MEM,
+    ZHPEQ_INSERT_HOOK,
     ZHPEQ_INSERT_LEN,
     ZHPEQ_INSERT_SHIFT  = 16,
 };
 
-extern zhpeq_xq_entry_insert_fn zhpeq_insert[];
+#define ZHPEQ_TQ_RESERVATION_MASK ((1U << ZHPEQ_INSERT_SHIFT) - 1)
+
+extern zhpeq_tq_entry_insert_fn zhpeq_insert[];
 
 struct zhpeq_rq {
-    struct zhpeq_dom    *zdom;
+    struct zhpeq_dom    *zqdom;
     struct zhpe_rqinfo  rqinfo;
     volatile void       *qcm;
     union zhpe_hw_rdm_entry *rq;
@@ -246,19 +238,19 @@ int zhpeq_init(int api_version);
 
 int zhpeq_query_attr(struct zhpeq_attr *attr);
 
-int zhpeq_domain_alloc(struct zhpeq_dom **zdom_out);
+int zhpeq_domain_alloc(struct zhpeq_dom **zqdom_out);
 
-int zhpeq_domain_free(struct zhpeq_dom *zdom);
+int zhpeq_domain_free(struct zhpeq_dom *zqdom);
 
-int zhpeq_xq_alloc(struct zhpeq_dom *zdom, int cmd_qlen, int cmp_qlen,
+int zhpeq_tq_alloc(struct zhpeq_dom *zqdom, int cmd_qlen, int cmp_qlen,
                    int traffic_class, int priority, int slice_mask,
-                   struct zhpeq_xq **zxq_out);
+                   struct zhpeq_tq **ztq_out);
 
-int zhpeq_xq_free(struct zhpeq_xq *zxq);
+int zhpeq_tq_free(struct zhpeq_tq *ztq);
 
-int zhpeq_xq_backend_open(struct zhpeq_xq *zxq, void *sa);
+int zhpeq_tq_backend_open(struct zhpeq_tq *ztq, void *sa);
 
-int zhpeq_xq_backend_close(struct zhpeq_xq *zxq, int open_idx);
+int zhpeq_tq_backend_close(struct zhpeq_tq *ztq, int open_idx);
 
 static inline uint64_t ioread64(const volatile void *addr)
 {
@@ -280,58 +272,61 @@ static inline void qcmwrite64(uint64_t value, volatile void *qcm, size_t off)
     iowrite64(value, (char *)qcm + off);
 }
 
-int32_t zhpeq_xq_reserve(struct zhpeq_xq *zxq);
+int32_t zhpeq_tq_reserve_type(struct zhpeq_tq *ztq, int32_t cmd_type);
 
-static inline void zhpeq_xq_unreserve(struct zhpeq_xq *zxq, int32_t reservation)
+static inline int32_t zhpeq_tq_reserve(struct zhpeq_tq *ztq)
+{
+    /*
+     * Non-fence case: cmd buffers can be used.
+     *
+     * Fence operations only work on memory queue ops, so call
+     * zhpeq_tq_reserve_type(ztq, ZHPEQ_INSERT_MEM) when using hardware
+     * fence.
+     */
+    return zhpeq_tq_reserve_type(ztq, ZHPEQ_INSERT_CMD);
+}
+
+static inline void zhpeq_tq_unreserve(struct zhpeq_tq *ztq, int32_t reservation)
 {
     uint16_t            index = (uint16_t)reservation;
 
     barrier();
-    zxq->free_bitmap[index >> ZHPEQ_BITMAP_SHIFT] |=
+    ztq->free_bitmap[index >> ZHPEQ_BITMAP_SHIFT] |=
         ((uint64_t)1 << (index & (ZHPEQ_BITMAP_BITS - 1)));
 }
 
-void zhpeq_xq_commit(struct zhpeq_xq *zxq);
+void zhpeq_tq_commit(struct zhpeq_tq *ztq);
 
-static inline void zhpeq_xq_insert(struct zhpeq_xq *zxq, int32_t reservation,
-                                   bool force_mem)
+static inline void zhpeq_tq_insert(struct zhpeq_tq *ztq, int32_t reservation)
 {
-    /*
-     * Fence operations on work on memory queue ops; set force_mem to true
-     * if fences will be used. The assumption is that force_mem will
-     * usually a constant.
-     */
-    if (force_mem)
-        zhpeq_insert[ZHPEQ_INSERT_MEM](zxq, reservation);
-    else
-        zhpeq_insert[reservation >> ZHPEQ_INSERT_SHIFT](zxq, reservation);
+    zhpeq_insert[reservation >> ZHPEQ_INSERT_SHIFT](ztq, reservation);
 }
 
-static inline void zhpeq_xq_set_context(struct zhpeq_xq *zxq,
+static inline void zhpeq_tq_set_context(struct zhpeq_tq *ztq,
                                         int32_t reservation, void *context)
 {
-    zxq->ctx[(uint16_t)reservation] = context;
+    ztq->ctx[(uint16_t)reservation] = context;
 }
 
-static inline union zhpe_hw_wq_entry *zhpeq_xq_get_wqe(struct zhpeq_xq *zxq,
+static inline union zhpe_hw_wq_entry *zhpeq_tq_get_wqe(struct zhpeq_tq *ztq,
                                                        int32_t reservation)
 {
-    return &zxq->mem[(uint16_t)reservation];
+    return &ztq->mem[(uint16_t)reservation];
 }
 
-static inline void zhpeq_xq_nop(union zhpe_hw_wq_entry *wqe,
+static inline void zhpeq_tq_nop(union zhpe_hw_wq_entry *wqe,
                                 uint16_t op_flags)
 {
     wqe->hdr.opcode = ZHPE_HW_OPCODE_NOP | op_flags;
 }
 
-static inline void zhpeq_xq_sync(union zhpe_hw_wq_entry *wqe,
+static inline void zhpeq_tq_sync(union zhpe_hw_wq_entry *wqe,
                                  uint16_t op_flags)
 {
     wqe->hdr.opcode = ZHPE_HW_OPCODE_SYNC | ZHPE_HW_OPCODE_FENCE | op_flags;
 }
 
-static inline void zhpeq_xq_rw(union zhpe_hw_wq_entry *wqe,
+static inline void zhpeq_tq_rw(union zhpe_hw_wq_entry *wqe,
                                uint16_t opcode, uint64_t rd_addr, size_t len,
                                uint64_t wr_addr)
 {
@@ -341,14 +336,14 @@ static inline void zhpeq_xq_rw(union zhpe_hw_wq_entry *wqe,
     wqe->dma.wr_addr = wr_addr;
 }
 
-static inline void zhpeq_xq_put(union zhpe_hw_wq_entry *wqe,
+static inline void zhpeq_tq_put(union zhpe_hw_wq_entry *wqe,
                                 uint16_t op_flags, uint64_t lcl_addr,
                                 size_t len, uint64_t rem_addr)
 {
-    zhpeq_xq_rw(wqe, (ZHPE_HW_OPCODE_PUT | op_flags), lcl_addr, len, rem_addr);
+    zhpeq_tq_rw(wqe, (ZHPE_HW_OPCODE_PUT | op_flags), lcl_addr, len, rem_addr);
 }
 
-static inline void *zhpeq_xq_puti(union zhpe_hw_wq_entry *wqe,
+static inline void *zhpeq_tq_puti(union zhpe_hw_wq_entry *wqe,
                                   uint16_t op_flags, size_t len,
                                   uint64_t rem_addr)
 {
@@ -359,14 +354,14 @@ static inline void *zhpeq_xq_puti(union zhpe_hw_wq_entry *wqe,
     return wqe->imm.data;
 }
 
-static inline void zhpeq_xq_get(union zhpe_hw_wq_entry *wqe,
+static inline void zhpeq_tq_get(union zhpe_hw_wq_entry *wqe,
                                 uint16_t op_flags, uint64_t lcl_addr,
                                 size_t len, uint64_t rem_addr)
 {
-    zhpeq_xq_rw(wqe, (ZHPE_HW_OPCODE_GET | op_flags), rem_addr, len, lcl_addr);
+    zhpeq_tq_rw(wqe, (ZHPE_HW_OPCODE_GET | op_flags), rem_addr, len, lcl_addr);
 }
 
-static inline void zhpeq_xq_geti(union zhpe_hw_wq_entry *wqe,
+static inline void zhpeq_tq_geti(union zhpe_hw_wq_entry *wqe,
                                  uint16_t op_flags, size_t len,
                                  uint64_t rem_addr)
 {
@@ -375,8 +370,8 @@ static inline void zhpeq_xq_geti(union zhpe_hw_wq_entry *wqe,
     wqe->imm.rem_addr = rem_addr;
 }
 
-static inline struct zhpe_enqa_payload *
-zhpeq_xq_enqa(union zhpe_hw_wq_entry *wqe, uint16_t op_flags,
+static inline void *
+zhpeq_tq_enqa(union zhpe_hw_wq_entry *wqe, uint16_t op_flags,
               uint32_t dgcid, uint32_t rspctxid)
 {
     wqe->hdr.opcode = ZHPE_HW_OPCODE_ENQA | op_flags;
@@ -386,12 +381,12 @@ zhpeq_xq_enqa(union zhpe_hw_wq_entry *wqe, uint16_t op_flags,
     return &wqe->enqa.payload;
 }
 
-void zhpeq_xq_atomic(union zhpe_hw_wq_entry *wqe,
+void zhpeq_tq_atomic(union zhpe_hw_wq_entry *wqe,
                      uint16_t op_flags, enum zhpeq_atomic_size datasize,
                      enum zhpeq_atomic_op op, uint64_t rem_addr,
                      const uint64_t *operands);
 
-int zhpeq_xq_restart(struct zhpeq_xq *zxq);
+int zhpeq_tq_restart(struct zhpeq_tq *ztq);
 
 static inline void *zhpeq_q_entry(void *entries, uint32_t qindex,
                                   uint32_t qmask)
@@ -408,11 +403,11 @@ static inline bool zhpeq_cmp_valid(volatile void *qent, uint32_t qindex,
     return ((valid ^ (qindex >> shift)) & ZHPE_CMP_ENT_VALID_MASK);
 }
 
-static inline struct zhpe_cq_entry *zhpeq_xq_cq_entry(struct zhpeq_xq *zxq)
+static inline struct zhpe_cq_entry *zhpeq_tq_cq_entry(struct zhpeq_tq *ztq)
 {
-    uint32_t            qmask = zxq->xqinfo.cmplq.ent - 1;
-    uint32_t            qindex = zxq->cq_head;
-    struct zhpe_cq_entry *cqe = zhpeq_q_entry(zxq->cq, qindex, qmask);
+    uint32_t            qmask = ztq->tqinfo.cmplq.ent - 1;
+    uint32_t            qindex = ztq->cq_head;
+    struct zhpe_cq_entry *cqe = zhpeq_q_entry(ztq->cq, qindex, qmask);
 
     /* likely() to optimize the success case. */
     if (likely(zhpeq_cmp_valid(cqe, qindex, qmask))) {
@@ -422,26 +417,26 @@ static inline struct zhpe_cq_entry *zhpeq_xq_cq_entry(struct zhpeq_xq *zxq)
     return NULL;
 }
 
-static inline void *zhpeq_xq_cq_context(struct zhpeq_xq *zxq,
+static inline void *zhpeq_tq_cq_context(struct zhpeq_tq *ztq,
                                         struct zhpe_cq_entry *cqe)
 {
-    return zxq->ctx[cqe->index];
+    return ztq->ctx[cqe->index];
 }
 
-static inline void zhpeq_xq_cq_entry_done(struct zhpeq_xq *zxq,
+static inline void zhpeq_tq_cq_entry_done(struct zhpeq_tq *ztq,
                                           struct zhpe_cq_entry *cqe)
 {
     /*
      * Simple rule: do not access the cqe or the backup copy of the
      * XDM command after this call.
      */
-    zhpeq_xq_unreserve(zxq, cqe->index);
-    zxq->cq_head++;
+    zhpeq_tq_unreserve(ztq, cqe->index);
+    ztq->cq_head++;
 }
 
 int zhpeq_rq_free(struct zhpeq_rq *zrq);
 
-int zhpeq_rq_alloc(struct zhpeq_dom *zdom, int rx_qlen, int slice_mask,
+int zhpeq_rq_alloc(struct zhpeq_dom *zqdom, int rx_qlen, int slice_mask,
                    struct zhpeq_rq **zrq_out);
 
 /*
@@ -573,7 +568,7 @@ void zhpeq_rx_oos_log(const char *func, uint line,
 
 #endif
 
-int zhpeq_mr_reg(struct zhpeq_dom *zdom, const void *buf, size_t len,
+int zhpeq_mr_reg(struct zhpeq_dom *zqdom, const void *buf, size_t len,
                  uint32_t access, struct zhpeq_key_data **qkdata_out);
 
 int zhpeq_qkdata_free(struct zhpeq_key_data *qkdata);
@@ -581,11 +576,11 @@ int zhpeq_qkdata_free(struct zhpeq_key_data *qkdata);
 int zhpeq_qkdata_export(const struct zhpeq_key_data *qkdata,
                         void *blob, size_t *blob_len);
 
-int zhpeq_qkdata_import(struct zhpeq_dom *zdom, int open_idx,
+int zhpeq_qkdata_import(struct zhpeq_dom *zqdom, int open_idx,
                         const void *blob, size_t blob_len,
                         struct zhpeq_key_data **qkdata_out);
 
-int zhpeq_fam_qkdata(struct zhpeq_dom *zdom, int open_idx,
+int zhpeq_fam_qkdata(struct zhpeq_dom *zqdom, int open_idx,
                      struct zhpeq_key_data **qkdata_out, size_t *n_qkdata);
 
 int zhpeq_zmmu_reg(struct zhpeq_key_data *qkdata);
@@ -605,19 +600,22 @@ static inline bool zhpeq_is_asic(void)
     return true;
 }
 
+int zhpeq_getzaddr(const char *host, const char *service,
+                   struct sockaddr_zhpe *sz);
+
 /* Info/debugging */
 
-void zhpeq_print_xq_info(struct zhpeq_xq *zxq);
+void zhpeq_print_tq_info(struct zhpeq_tq *ztq);
 
 void zhpeq_print_qkdata(const char *func, uint line,
                         const struct zhpeq_key_data *qkdata);
 
-void zhpeq_print_xq_qcm(const char *func, uint line,
-                        const struct zhpeq_xq *zxq);
+void zhpeq_print_tq_qcm(const char *func, uint line,
+                        const struct zhpeq_tq *ztq);
 
-void zhpeq_print_xq_wq(struct zhpeq_xq *zxq, int cnt);
+void zhpeq_print_tq_wq(struct zhpeq_tq *ztq, int cnt);
 
-void zhpeq_print_xq_cq(struct zhpeq_xq *zxq, int cnt);
+void zhpeq_print_tq_cq(struct zhpeq_tq *ztq, int cnt);
 
 void zhpeq_print_rq_qcm(const char *func, uint line,
                         const struct zhpeq_rq *zrq);

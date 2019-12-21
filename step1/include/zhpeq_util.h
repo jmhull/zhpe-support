@@ -160,7 +160,7 @@ extern const char       *zhpeu_appname;
 /* Borrow AF_APPLETALK since it should never be seen. */
 #define AF_ZHPE                 ((sa_family_t)AF_APPLETALK)
 #define ZHPE_ADDRSTRLEN         ((size_t)37)
-#define ZHPE_WILDCARD           (0)     /* Valid, but reserved by driver. */
+#define ZHPE_SZQ_WILDCARD       (0)     /* Valid, but reserved by driver. */
 #define ZHPE_SZQ_INVAL          (~(uint32_t)0)
 
 #define ZHPE_GCID_MASK          (((uint32_t)1 << ZHPE_GCID_BITS) - 1)
@@ -311,6 +311,7 @@ static inline int ffs64(uint64_t v)
 
 #undef _BARRIED_DEFINED
 
+#define PACKED          __attribute__ ((packed));
 #define INT32_ALIGNED   __attribute__ ((aligned (__alignof__(int32_t))));
 #define INT64_ALIGNED   __attribute__ ((aligned (__alignof__(int64_t))));
 #define INT128_ALIGNED  __attribute__ ((aligned (__alignof__(__int128_t))));

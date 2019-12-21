@@ -91,7 +91,7 @@ struct stuff {
     void                (*free)(void *ptr);
     const struct args   *args;
     struct zhpeq_dom    *zdom;
-    struct zhpeq_xq     *zxq;
+    struct zhpeq_tq     *ztq;
     struct zhpeq_rq     *zrq;
     int                 sock_fd;
     size_t              ring_ops;
@@ -140,7 +140,7 @@ static void conn_stats_print(struct stuff *conn)
     zhpeu_timing_print(&conn->rx_lat, "rx_lat", 1);
     zhpeu_print_info("%s:tx/rx %u/%u, tx_oos/max/retry %lu/%u/%lu"
                      " rx_oos/max %lu/%u epoll %lu\n",
-                     zhpeu_appname, conn->zxq->cq_head, conn->zrq->head,
+                     zhpeu_appname, conn->ztq->cq_head, conn->zrq->head,
                      conn->tx_oos_cnt, conn->tx_oos_max, conn->tx_retry,
                      conn->rx_zseq.rx_oos_cnt, conn->rx_zseq.rx_oos_max,
                      conn->epoll_cnt);
@@ -153,9 +153,9 @@ static void stuff_free(struct stuff *stuff)
 
     zhpeq_rq_epoll_free(stuff->zepoll);
     if (stuff->open_idx != -1)
-        zhpeq_xq_backend_close(stuff->zxq, stuff->open_idx);
+        zhpeq_tq_backend_close(stuff->ztq, stuff->open_idx);
     zhpeq_rq_free(stuff->zrq);
-    zhpeq_xq_free(stuff->zxq);
+    zhpeq_tq_free(stuff->ztq);
     zhpeq_domain_free(stuff->zdom);
 
     FD_CLOSE(stuff->sock_fd);
@@ -165,22 +165,21 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start,
                        uint32_t msg_seq, uint8_t flag)
 {
     int32_t             ret;
-    struct zhpeq_xq     *zxq = conn->zxq;
+    struct zhpeq_tq     *ztq = conn->ztq;
     uint64_t            start = get_cycles(NULL);
     struct enqa_msg     *msg;
     union zhpe_hw_wq_entry *wqe;
 
-
-    ret = zhpeq_xq_reserve(zxq);
+    ret = zhpeq_tq_reserve(ztq);
     if (ret < 0) {
         if (ret != -EAGAIN)
-            zhpeu_print_func_err(__func__, __LINE__, "zhpeq_xq_reserve", "",
+            zhpeu_print_func_err(__func__, __LINE__, "zhpeq_tq_reserve", "",
                                  ret);
         goto done;
     }
-    wqe = zhpeq_xq_get_wqe(zxq, ret);
-    msg = (void *)zhpeq_xq_enqa(wqe, 0, conn->dgcid, conn->rspctxid);
-    zhpeq_xq_set_context(zxq, ret, msg);
+    wqe = zhpeq_tq_get_wqe(ztq, ret);
+    msg = (void *)zhpeq_tq_enqa(wqe, 0, conn->dgcid, conn->rspctxid);
+    zhpeq_tq_set_context(ztq, ret, msg);
     msg->tx_start = htobe64(start);
     if (!pp_start)
         pp_start = msg->tx_start;
@@ -188,8 +187,8 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start,
     msg->msg_seq = msg_seq;
     msg->tx_seq = conn->tx_seq++;
     msg->flag = flag;
-    zhpeq_xq_insert(zxq, ret, false);
-    zhpeq_xq_commit(zxq);
+    zhpeq_tq_insert(ztq, ret, false);
+    zhpeq_tq_commit(ztq);
     conn->tx_avail--;
     zhpeu_timing_update(&conn->tx_lat, get_cycles(NULL) - start);
 
@@ -229,21 +228,21 @@ static int conn_tx_msg_retry(struct stuff *conn, uint64_t pp_start,
 static int conn_tx_completions(struct stuff *conn, bool qfull_ok, bool qd_check)
 {
     ssize_t             ret = 0;
-    struct zhpeq_xq     *zxq = conn->zxq;
+    struct zhpeq_tq     *ztq = conn->ztq;
     struct enqa_msg     *msg;
     struct enqa_msg     msg_copy;
     int32_t             oos;
     struct zhpe_cq_entry *cqe;
     struct zhpe_cq_entry cqe_copy;
 
-    while ((cqe = zhpeq_xq_cq_entry(zxq))) {
+    while ((cqe = zhpeq_tq_cq_entry(ztq))) {
         conn->tx_avail++;
-        msg = zhpeq_xq_cq_context(zxq, cqe);
+        msg = zhpeq_tq_cq_context(ztq, cqe);
         /* unlikely() to optimize the no-error case. */
-        if (unlikely(cqe->status != ZHPEQ_XQ_CQ_STATUS_SUCCESS)) {
+        if (unlikely(cqe->status != ZHPE_HW_CQ_STATUS_SUCCESS)) {
             cqe_copy = *cqe;
             msg_copy = *msg;
-            zhpeq_xq_cq_entry_done(zxq, cqe);
+            zhpeq_tq_cq_entry_done(ztq, cqe);
             ret = -EIO;
             if (cqe_copy.status != ZHPE_HW_CQ_STATUS_GENZ_RDM_QUEUE_FULL) {
                 zhpeu_print_err("%s,%u:cqe %p ctx %p index 0x%x status 0x%x\n",
@@ -262,8 +261,8 @@ static int conn_tx_completions(struct stuff *conn, bool qfull_ok, bool qd_check)
         }
         zhpeu_timing_update(&conn->tx_cmp,
                             get_cycles(NULL) - be64toh(msg->tx_start));
-        oos = (int32_t)(msg->tx_seq - zxq->cq_head);
-        zhpeq_xq_cq_entry_done(zxq, cqe);
+        oos = (int32_t)(msg->tx_seq - ztq->cq_head);
+        zhpeq_tq_cq_entry_done(ztq, cqe);
         if (unlikely(oos)) {
             conn->tx_oos_cnt++;
             conn->tx_oos_max = max(conn->tx_oos_max, (uint32_t)abs(oos));
@@ -439,7 +438,7 @@ static int do_server_pong(struct stuff *conn)
     uint64_t            warmup_count;
     struct enqa_msg     msg;
 
-    zhpeq_print_xq_info(conn->zxq);
+    zhpeq_print_tq_info(conn->ztq);
 
     /* Tests for QD, overflow, and epoll. */
     if (!args->pp_only) {
@@ -519,7 +518,7 @@ static void do_pci_rd(struct stuff *conn, uint ops)
 static int do_nop(struct stuff *conn, uint ops)
 {
     int                 ret;
-    struct zhpeq_xq     *zxq = conn->zxq;
+    struct zhpeq_tq     *ztq = conn->ztq;
     struct zhpe_cq_entry *cqe;
     uint                i;
     uint64_t            start;
@@ -527,21 +526,21 @@ static int do_nop(struct stuff *conn, uint ops)
 
     conn_tx_stats_reset(conn);
     for (i = 0; i < ops; i++) {
-        ret = zhpeq_xq_reserve(zxq);
+        ret = zhpeq_tq_reserve(ztq);
         if (ret < 0) {
             if (ret != -EAGAIN)
-                zhpeu_print_func_err(__func__, __LINE__, "zhpeq_xq_reserve", "",
+                zhpeu_print_func_err(__func__, __LINE__, "zhpeq_tq_reserve", "",
                                      ret);
             goto done;
         }
-        wqe = zhpeq_xq_get_wqe(zxq, ret);
-        zhpeq_xq_nop(wqe, 0);
+        wqe = zhpeq_tq_get_wqe(ztq, ret);
+        zhpeq_tq_nop(wqe, 0);
         start = get_cycles(NULL);
-        zhpeq_xq_insert(zxq, ret, false);
-        zhpeq_xq_commit(zxq);
-        while (!(cqe = zhpeq_xq_cq_entry(zxq)));
+        zhpeq_tq_insert(ztq, ret, false);
+        zhpeq_tq_commit(ztq);
+        while (!(cqe = zhpeq_tq_cq_entry(ztq)));
         zhpeu_timing_update(&conn->tx_cmp, get_cycles(NULL) - start);
-        zhpeq_xq_cq_entry_done(zxq, cqe);
+        zhpeq_tq_cq_entry_done(ztq, cqe);
     }
     conn_stats_print(conn);
 
@@ -641,7 +640,7 @@ static int do_client_pong(struct stuff *conn)
     uint64_t            now;
     uint64_t            delta;
 
-    zhpeq_print_xq_info(conn->zxq);
+    zhpeq_print_tq_info(conn->ztq);
 
     /* Measure PCI register read time. */
     do_pci_rd(conn, 5);
@@ -649,8 +648,8 @@ static int do_client_pong(struct stuff *conn)
     ret = do_nop(conn, 5);
     if (ret < 0)
         goto done;
-    /* Synchronize conn->tx_seq and zxq->cq_head. */
-    conn->tx_seq = conn->zxq->cq_head;
+    /* Synchronize conn->tx_seq and ztq->cq_head. */
+    conn->tx_seq = conn->ztq->cq_head;
 
     /* Tests for QD, overflow, and epoll. */
     if (!args->pp_only) {
@@ -793,10 +792,10 @@ static int do_q_setup(struct stuff *conn)
         goto done;
     }
     /* Allocate zqueues. */
-    ret = zhpeq_xq_alloc(conn->zdom, conn->tqlen, conn->tqlen,
-                         0, 0, 0,  &conn->zxq);
+    ret = zhpeq_tq_alloc(conn->zdom, conn->tqlen, conn->tqlen,
+                         0, 0, 0,  &conn->ztq);
     if (ret < 0) {
-        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_xq_alloc", "", ret);
+        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_tq_alloc", "", ret);
         goto done;
     }
     /*
@@ -805,7 +804,7 @@ static int do_q_setup(struct stuff *conn)
      * specify 16 and use only command buffers.
      */
     conn->tx_max = conn->tx_avail = conn->tqlen;
-    conn->tqlen = conn->zxq->xqinfo.cmdq.ent - 1;
+    conn->tqlen = conn->ztq->tqinfo.cmdq.ent - 1;
 
     ret = zhpeq_rq_alloc(conn->zdom, conn->rqlen, 0, &conn->zrq);
     if (ret < 0) {
@@ -813,8 +812,8 @@ static int do_q_setup(struct stuff *conn)
         goto done;
     }
     conn->rqlen = conn->zrq->rqinfo.cmplq.ent - 1;
-    if (!zhpeu_expected_saw("qlen1", conn->zxq->xqinfo.cmdq.ent,
-                            conn->zxq->xqinfo.cmplq.ent)) {
+    if (!zhpeu_expected_saw("qlen1", conn->ztq->tqinfo.cmdq.ent,
+                            conn->ztq->tqinfo.cmplq.ent)) {
         ret = -EIO;
         goto done;
     }
@@ -852,7 +851,7 @@ static int do_q_setup(struct stuff *conn)
     /* Exchange addresses. */
     ret = zhpeq_rq_xchg_addr(conn->zrq, conn->sock_fd, &sa, &sa_len);
     if (ret < 0) {
-        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_xq_xchg_addr", "", ret);
+        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_tq_xchg_addr", "", ret);
         goto done;
     }
     if (!zhpeu_expected_saw("sa_family", zhpeu_sockaddr_family(&sa), AF_ZHPE)) {
@@ -863,9 +862,9 @@ static int do_q_setup(struct stuff *conn)
     conn->rspctxid = sa.zhpe.sz_queue;
 
     /* Do setup for remote. */
-    ret = zhpeq_xq_backend_open(conn->zxq, &sa);
+    ret = zhpeq_tq_backend_open(conn->ztq, &sa);
     if (ret < 0) {
-        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_xq_backend_open",
+        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_tq_backend_open",
                              "", ret);
         goto done;
     }
@@ -1071,7 +1070,7 @@ static void usage(bool help)
         zhpeu_appname, DEFAULT_QLEN, DEFAULT_QLEN);
 
     if (help)
-        zhpeq_print_xq_info(NULL);
+        zhpeq_print_tq_info(NULL);
 
     exit(help ? 0 : 255);
 }

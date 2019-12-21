@@ -56,24 +56,24 @@ _EXTERN_C_BEG
 struct key_data_packed;
 struct zhpeq_domi;
 struct zhpeq_rqi;
-struct zhpeq_xqi;
+struct zhpeq_tqi;
 
 struct backend_ops {
     int                 (*lib_init)(struct zhpeq_attr *attr);
-    int                 (*domain)(struct zhpeq_domi *zdomi);
-    int                 (*domain_free)(struct zhpeq_domi *zdomi);
-    int                 (*xqalloc)(struct zhpeq_xqi *xqi,
+    int                 (*domain)(struct zhpeq_domi *zqdomi);
+    int                 (*domain_free)(struct zhpeq_domi *zqdomi);
+    int                 (*tqalloc)(struct zhpeq_tqi *tqi,
                                    int cmd_qlen, int cmp_qlen,
                                    int traffic_class, int priority,
                                    int slice_mask);
-    int                 (*xqalloc_post)(struct zhpeq_xqi *xqi);
-    int                 (*xqfree_pre)(struct zhpeq_xqi *xqi);
-    int                 (*xqfree)(struct zhpeq_xqi *xqi);
-    int                 (*open)(struct zhpeq_xqi *xqi, void *sa);
-    int                 (*close)(struct zhpeq_xqi *xqi, int open_idx);
-    int                 (*wq_signal)(struct zhpeq_xqi *zxq);
-    ssize_t             (*cq_poll)(struct zhpeq_xqi *xqi, size_t len);
-    int                 (*mr_reg)(struct zhpeq_domi *zdomi,
+    int                 (*tqalloc_post)(struct zhpeq_tqi *tqi);
+    int                 (*tqfree_pre)(struct zhpeq_tqi *tqi);
+    int                 (*tqfree)(struct zhpeq_tqi *tqi);
+    int                 (*open)(struct zhpeq_tqi *tqi, void *sa);
+    int                 (*close)(struct zhpeq_tqi *tqi, int open_idx);
+    int                 (*wq_signal)(struct zhpeq_tqi *ztq);
+    ssize_t             (*cq_poll)(struct zhpeq_tqi *tqi, size_t len);
+    int                 (*mr_reg)(struct zhpeq_domi *zqdomi,
                                   const void *buf, size_t len, uint32_t access,
                                   struct zhpeq_key_data **qkdata_out);
     int                 (*mr_free)(struct zhpeq_key_data *qkdata);
@@ -81,7 +81,7 @@ struct backend_ops {
                                          struct key_data_packed *blob);
     int                 (*zmmu_reg)(struct zhpeq_key_data *qkdata);
     int                 (*zmmu_free)(struct zhpeq_key_data *qkdata);
-    int                 (*fam_qkdata)(struct zhpeq_dom *zdom, int open_idx,
+    int                 (*fam_qkdata)(struct zhpeq_dom *zqdom, int open_idx,
                                       struct zhpeq_key_data **qkdata_out,
                                       size_t *n_qkdata_out);
     int                 (*mmap)(const struct zhpeq_key_data *qkdata,
@@ -93,8 +93,8 @@ struct backend_ops {
     int                 (*mmap_commit)(struct zhpeq_mmap_desc *zmdesc,
                                        const void *addr, size_t length,
                                        bool fence, bool invalidate, bool wait);
-    void                (*print_xq_info)(struct zhpeq_xq *zxq);
-    int                 (*xq_get_addr)(struct zhpeq_xq *zxq, void *sa,
+    void                (*print_tq_info)(struct zhpeq_tq *ztq);
+    int                 (*tq_get_addr)(struct zhpeq_tq *ztq, void *sa,
                                     size_t *sa_len);
     char                *(*qkdata_id_str)(const struct zhpeq_key_data *qkdata);
 };
@@ -120,7 +120,7 @@ struct zhpeq_ht {
 } INT64_ALIGNED;
 
 struct zhpeq_domi {
-    struct zhpeq_dom    zdom;
+    struct zhpeq_dom    zqdom;
     void                *backend_data;
 };
 
@@ -151,8 +151,8 @@ static inline void zhpeq_rq_epolli_put(struct zhpeq_rq_epolli *epolli)
         __zhpeq_rq_epolli_free(epolli);
 }
 
-struct zhpeq_xqi {
-    struct zhpeq_xq     zxq;
+struct zhpeq_tqi {
+    struct zhpeq_tq     ztq;
     void                *backend_data;
     int                 dev_fd;
 };
@@ -210,7 +210,6 @@ static inline void unpack_kdata(const struct key_data_packed *pdata,
 struct zhpeq_mr_desc_common_hdr {
     uint32_t            magic;
     uint32_t            version;
-    struct zhpeq_domi   *zdomi;
 };
 
 struct zhpeq_mr_desc_v1 {
@@ -262,6 +261,22 @@ static inline bool zrq_check_idle(struct zhpeq_rq *zrq)
                        ZHPE_RDM_QCM_RCV_QUEUE_TAIL_TOGGLE_OFFSET) & qmask);
 
     return (qhead == qtail);
+}
+
+static inline void *tqi2bdom(struct zhpeq_tqi *tqi)
+{
+    struct zhpeq_domi   *zqdomi = container_of(tqi->ztq.zqdom,
+                                               struct zhpeq_domi, zqdom);
+
+    return zqdomi->backend_data;
+}
+
+static inline void *desc2bdom(const struct zhpeq_mr_desc_v1 *desc)
+{
+    struct zhpeq_domi   *zqdomi = container_of(desc->qkdata.zqdom,
+                                               struct zhpeq_domi, zqdom);
+
+    return zqdomi->backend_data;
 }
 
 _EXTERN_C_END

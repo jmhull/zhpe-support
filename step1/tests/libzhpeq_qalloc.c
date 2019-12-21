@@ -181,7 +181,7 @@ static bool queue_ok(const char *label, volatile void *ptr,
 int main(int argc, char **argv)
 {
     int                 ret = 1;
-    struct zhpeq_xq     **zxq = NULL;
+    struct zhpeq_tq     **ztq = NULL;
     struct zhpeq_dom    *zdom = NULL;
     uint                *shuffle = NULL;
     bool                seed = false;
@@ -260,8 +260,8 @@ int main(int argc, char **argv)
         qlen = u64;
     }
 
-    zxq = calloc(queues, sizeof(*zxq));
-    if (!zxq)
+    ztq = calloc(queues, sizeof(*ztq));
+    if (!ztq)
         goto done;
     shuffle = calloc(queues, sizeof(*shuffle));
     if (!shuffle)
@@ -285,68 +285,68 @@ int main(int argc, char **argv)
      */
     for (h = 0; h < queues; h++) {
         i = shuffle[h];
-        if (zxq[i])
+        if (ztq[i])
             print_err("%s,%u:random_array() broken\n", __func__, __LINE__);
         cmd_len = (qlen ?: random_range(2, attr.z.max_tx_qlen));
         cmp_len = (qlen ?: random_range(2, attr.z.max_tx_qlen));
-        rc = zhpeq_xq_alloc(zdom, cmd_len, cmp_len, i & 0xF, i & 0x1, 0,
-                            &zxq[i]);
+        rc = zhpeq_tq_alloc(zdom, cmd_len, cmp_len, i & 0xF, i & 0x1, 0,
+                            &ztq[i]);
         if (rc < 0) {
-            print_func_errn(__func__, __LINE__, "zhpeq_xq_alloc", qlen, false,
+            print_func_errn(__func__, __LINE__, "zhpeq_tq_alloc", qlen, false,
                             rc);
             goto done;
         }
-        if (zxq[i]->xqinfo.cmdq.ent < cmd_len) {
+        if (ztq[i]->tqinfo.cmdq.ent < cmd_len) {
             print_err("%s,%u:returned cmd_len %u < %lu.\n",
-                      __func__, __LINE__, zxq[i]->xqinfo.cmdq.ent, cmd_len);
+                      __func__, __LINE__, ztq[i]->tqinfo.cmdq.ent, cmd_len);
             goto done;
         }
-        if (zxq[i]->xqinfo.cmdq.ent & (zxq[i]->xqinfo.cmdq.ent - 1)) {
+        if (ztq[i]->tqinfo.cmdq.ent & (ztq[i]->tqinfo.cmdq.ent - 1)) {
             print_err("%s,%u:returned qlen %u not a power of 2.\n",
-                      __func__, __LINE__, zxq[i]->xqinfo.cmdq.ent);
+                      __func__, __LINE__, ztq[i]->tqinfo.cmdq.ent);
             goto done;
         }
-        if (zxq[i]->xqinfo.cmplq.ent < cmp_len) {
+        if (ztq[i]->tqinfo.cmplq.ent < cmp_len) {
             print_err("%s,%u:returned cmp_len %u < %lu.\n",
-                      __func__, __LINE__, zxq[i]->xqinfo.cmplq.ent, cmp_len);
+                      __func__, __LINE__, ztq[i]->tqinfo.cmplq.ent, cmp_len);
             goto done;
         }
-        if (zxq[i]->xqinfo.cmplq.ent & (zxq[i]->xqinfo.cmplq.ent - 1)) {
+        if (ztq[i]->tqinfo.cmplq.ent & (ztq[i]->tqinfo.cmplq.ent - 1)) {
             print_err("%s,%u:returned qlen %u not a power of 2.\n",
-                      __func__, __LINE__, zxq[i]->xqinfo.cmplq.ent);
+                      __func__, __LINE__, ztq[i]->tqinfo.cmplq.ent);
             goto done;
         }
-        if (!qcm_ok(zxq[i]->qcm, &zxq[i]->xqinfo, i, zhpe, true))
+        if (!qcm_ok(ztq[i]->qcm, &ztq[i]->tqinfo, i, zhpe, true))
             goto done;
-        if (!queue_ok("cmdq",  zxq[i]->wq, &zxq[i]->xqinfo.cmdq, true))
+        if (!queue_ok("cmdq",  ztq[i]->wq, &ztq[i]->tqinfo.cmdq, true))
             goto done;
-        if (!queue_ok("cmpq",  zxq[i]->cq, &zxq[i]->xqinfo.cmplq, true))
+        if (!queue_ok("cmpq",  ztq[i]->cq, &ztq[i]->tqinfo.cmplq, true))
             goto done;
     }
     for (i = 0; i < queues; i++) {
-        if (!qcm_ok(zxq[i]->qcm, &zxq[i]->xqinfo, i, zhpe, false))
+        if (!qcm_ok(ztq[i]->qcm, &ztq[i]->tqinfo, i, zhpe, false))
             goto done;
-        if (!queue_ok("cmdq",  zxq[i]->wq, &zxq[i]->xqinfo.cmdq, false))
+        if (!queue_ok("cmdq",  ztq[i]->wq, &ztq[i]->tqinfo.cmdq, false))
             goto done;
-        if (!queue_ok("cmpq",  zxq[i]->cq, &zxq[i]->xqinfo.cmplq, false))
+        if (!queue_ok("cmpq",  ztq[i]->cq, &ztq[i]->tqinfo.cmplq, false))
             goto done;
     }
     /* Free a random 50%. */
     for (i = 0; i < queues; i++) {
         if (random_range(0, 1))
             continue;
-        zhpeq_xq_free(zxq[i]);
-        zxq[i] = NULL;
+        zhpeq_tq_free(ztq[i]);
+        ztq[i] = NULL;
     }
     /* Check remaining queues. */
     for (i = 0; i < queues; i++) {
-        if (!zxq[i])
+        if (!ztq[i])
             continue;
-        if (!qcm_ok(zxq[i]->qcm, &zxq[i]->xqinfo, i, zhpe, false))
+        if (!qcm_ok(ztq[i]->qcm, &ztq[i]->tqinfo, i, zhpe, false))
             goto done;
-        if (!queue_ok("cmdq",  zxq[i]->wq, &zxq[i]->xqinfo.cmdq, false))
+        if (!queue_ok("cmdq",  ztq[i]->wq, &ztq[i]->tqinfo.cmdq, false))
             goto done;
-        if (!queue_ok("cmpq",  zxq[i]->cq, &zxq[i]->xqinfo.cmplq, false))
+        if (!queue_ok("cmpq",  ztq[i]->cq, &ztq[i]->tqinfo.cmplq, false))
             goto done;
     }
     /* Leave a mess for exit+driver to clean up. */
@@ -354,7 +354,7 @@ int main(int argc, char **argv)
 
  done:
     zhpeq_domain_free(zdom);
-    free(zxq);
+    free(ztq);
     free(shuffle);
 
     printf("%s:done, ret = %d\n", appname, ret);

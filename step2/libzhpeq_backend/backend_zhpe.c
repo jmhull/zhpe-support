@@ -95,10 +95,10 @@ struct zepoll_data {
 
 #define BEPOLL_RQI_DISABLED     ((struct zhpeq_rqi *)1)
 
-struct zdom_data {
+struct zqdom_data {
     pthread_mutex_t     node_mutex;
     int32_t             node_idx;
-    struct zdom_node {
+    struct zqdom_node {
         struct dev_uuid_tree_entry *uue;
         uint64_t        big_req_zaddr;
         uint64_t        big_req_cnt;
@@ -295,10 +295,10 @@ static int uuid_free(uuid_t *uu)
     return ret;
 }
 
-static int zhpe_domain_free(struct zhpeq_domi *zdomi)
+static int zhpe_domain_free(struct zhpeq_domi *zqdomi)
 {
     int                 ret = 0;
-    struct zdom_data    *bdom = zdomi->backend_data;
+    struct zqdom_data   *bdom = zqdomi->backend_data;
     struct dev_uuid_tree_entry *uue;
     uint32_t            i;
     int                 rc;
@@ -306,7 +306,7 @@ static int zhpe_domain_free(struct zhpeq_domi *zdomi)
     if (!bdom)
         goto done;
 
-    zdomi->backend_data = NULL;
+    zqdomi->backend_data = NULL;
     mutex_destroy(&bdom->node_mutex);
     for (i = 0; i < bdom->node_idx; i++) {
         uue = bdom->nodes[i].uue;
@@ -322,12 +322,12 @@ static int zhpe_domain_free(struct zhpeq_domi *zdomi)
     return ret;
 }
 
-static int zhpe_domain(struct zhpeq_domi *zdomi)
+static int zhpe_domain(struct zhpeq_domi *zqdomi)
 {
     int                 ret = -ENOMEM;
-    struct zdom_data    *bdom;
+    struct zqdom_data   *bdom;
 
-    bdom = zdomi->backend_data = calloc(1, sizeof(*bdom));
+    bdom = zqdomi->backend_data = calloc(1, sizeof(*bdom));
     if (!bdom)
         goto done;
     mutex_init(&bdom->node_mutex, NULL);
@@ -337,12 +337,12 @@ static int zhpe_domain(struct zhpeq_domi *zdomi)
     return ret;
 }
 
-static int zhpe_xq_free_pre(struct zhpeq_xqi *xqi)
+static int zhpe_tq_free_pre(struct zhpeq_tqi *tqi)
 {
     return 0;
 }
 
-static int zhpe_xq_free(struct zhpeq_xqi *xqi)
+static int zhpe_tq_free(struct zhpeq_tqi *tqi)
 {
 
     int                 ret;
@@ -351,13 +351,13 @@ static int zhpe_xq_free(struct zhpeq_xqi *xqi)
     union zhpe_rsp      *rsp = &op.rsp;
 
     req->hdr.opcode = ZHPE_OP_XQFREE;
-    req->xqfree.info = xqi->zxq.xqinfo;
+    req->xqfree.info = tqi->ztq.tqinfo;
     ret = driver_cmd(&op, sizeof(req->xqfree), sizeof(rsp->xqfree), true);
 
     return ret;
 }
 
-static int zhpe_xq_alloc(struct zhpeq_xqi *xqi, int wqlen, int cqlen,
+static int zhpe_tq_alloc(struct zhpeq_tqi *tqi, int wqlen, int cqlen,
                          int traffic_class, int priority, int slice_mask)
 {
     int                 ret;
@@ -374,35 +374,27 @@ static int zhpe_xq_alloc(struct zhpeq_xqi *xqi, int wqlen, int cqlen,
     ret = driver_cmd(&op, sizeof(req->xqalloc), sizeof(rsp->xqalloc), true);
     if (ret < 0)
         goto done;
-    xqi->dev_fd = dev_fd;
-    xqi->zxq.xqinfo = rsp->xqalloc.info;
+    tqi->dev_fd = dev_fd;
+    tqi->ztq.tqinfo = rsp->xqalloc.info;
 
  done:
     return ret;
 }
 
-static int zhpe_xq_alloc_post(struct zhpeq_xqi *xqi)
+static int zhpe_tq_alloc_post(struct zhpeq_tqi *tqi)
 {
     return 0;
 }
 
-static inline struct zdom_data *xqi2bdom(struct zhpeq_xqi *xqi)
-{
-    struct zhpeq_domi   *zdomi = container_of(xqi->zxq.zdom, struct zhpeq_domi,
-                                              zdom);
-
-    return zdomi->backend_data;
-}
-
-static int zhpe_xq_open(struct zhpeq_xqi *xqi, void *sa)
+static int zhpe_tq_open(struct zhpeq_tqi *tqi, void *sa)
 {
     int                 ret = 0;
-    struct zdom_data    *bdom = xqi2bdom(xqi);
+    struct zqdom_data   *bdom = tqi2bdom(tqi);
     struct sockaddr_zhpe *sz = sa;
     union zhpe_op       op;
     union zhpe_req      *req = &op.req;
     union zhpe_rsp      *rsp = &op.rsp;
-    struct zdom_node    *node;
+    struct zqdom_node   *node;
     void                **tval;
     struct dev_uuid_tree_entry *uue;
 
@@ -479,11 +471,11 @@ static int zhpe_xq_open(struct zhpeq_xqi *xqi, void *sa)
     return ret;
 }
 
-static int zhpe_xq_close(struct zhpeq_xqi *xqi, int open_idx)
+static int zhpe_tq_close(struct zhpeq_tqi *tqi, int open_idx)
 {
     int                 ret = -EINVAL;
-    struct zdom_data    *bdom = xqi2bdom(xqi);
-    struct zdom_node    *node;
+    struct zqdom_data   *bdom = tqi2bdom(tqi);
+    struct zqdom_node   *node;
     struct dev_uuid_tree_entry *uue;
 
     if (open_idx < 0 || open_idx >= bdom->node_idx)
@@ -915,7 +907,7 @@ static int do_mr_free(uint64_t vaddr, size_t len, uint32_t access,
     return __driver_cmd(&op, sizeof(req->mr_free), sizeof(rsp->mr_free), true);
 }
 
-static int zhpe_mr_reg(struct zhpeq_domi *zdomi,
+static int zhpe_mr_reg(struct zhpeq_domi *zqdomi,
                        const void *buf, size_t len,
                        uint32_t access, struct zhpeq_key_data **qkdata_out)
 {
@@ -945,10 +937,10 @@ static int zhpe_mr_reg(struct zhpeq_domi *zdomi,
 
     desc->hdr.magic = ZHPE_MAGIC;
     desc->hdr.version = ZHPEQ_MR_V1 | ZHPEQ_MR_VREG;
-    desc->hdr.zdomi = zdomi;
     qkdata->z.vaddr = (uintptr_t)buf;
     qkdata->z.len = len;
     qkdata->z.access = access;
+    qkdata->zqdom = &zqdomi->zqdom;
 
     ret = 0;
 
@@ -1110,8 +1102,8 @@ static int zhpe_zmmu_reg(struct zhpeq_mr_desc_v1 *desc)
 {
     int                 ret = -EINVAL;
     struct zhpeq_key_data *qkdata = &desc->qkdata;
-    struct zdom_data    *bdom = desc->hdr.zdomi->backend_data;
-    struct zdom_node    *node = &bdom->nodes[desc->open_idx];
+    struct zqdom_data   *bdom = desc2bdom(desc);
+    struct zqdom_node   *node = &bdom->nodes[desc->open_idx];
 
     if (!node->uue)
         goto done;
@@ -1140,15 +1132,15 @@ static int zhpe_zmmu_reg(struct zhpeq_mr_desc_v1 *desc)
     return ret;
 }
 
-static int zhpe_fam_qkdata(struct zhpeq_domi *zdomi, int open_idx,
+static int zhpe_fam_qkdata(struct zhpeq_domi *zqdomi, int open_idx,
                            struct zhpeq_key_data **qkdata_out,
                            size_t *n_qkdata_out)
 {
     int                 ret = -EINVAL;
-    struct zdom_data    *bdom = zdomi->backend_data;
+    struct zqdom_data   *bdom = zqdomi->backend_data;
     struct zhpeq_mr_desc_v1 *desc = NULL;
     struct zhpeq_key_data *qkdata;
-    struct zdom_node    *node;
+    struct zqdom_node   *node;
     size_t              i;
     uint64_t            start[2];
     uint64_t            len[2];
@@ -1193,13 +1185,13 @@ static int zhpe_fam_qkdata(struct zhpeq_domi *zdomi, int open_idx,
 
         desc->hdr.magic = ZHPE_MAGIC;
         desc->hdr.version = ZHPEQ_MR_V1REMOTE;
-        desc->hdr.zdomi = zdomi;
         desc->open_idx = open_idx;
         qkdata->z.vaddr = start[i];
         qkdata->z.zaddr = 0;
         desc->rsp_zaddr = start[i];
         qkdata->z.len = len[i];
         qkdata->z.access = (ZHPEQ_MR_GET_REMOTE | ZHPEQ_MR_PUT_REMOTE);
+        qkdata->zqdom = &zqdomi->zqdom;
         qkdata_out[i] = qkdata;
     }
     ret = 0;
@@ -1219,8 +1211,8 @@ static int zhpe_zmmu_free(struct zhpeq_mr_desc_v1 *desc)
 {
     int                 ret = -EINVAL;
     struct zhpeq_key_data *qkdata = &desc->qkdata;
-    struct zdom_data    *bdom = desc->hdr.zdomi->backend_data;
-    struct zdom_node    *node = &bdom->nodes[desc->open_idx];
+    struct zqdom_data   *bdom = desc2bdom(desc);
+    struct zqdom_node   *node = &bdom->nodes[desc->open_idx];
 
     if (!node->uue)
         goto done;
@@ -1256,8 +1248,8 @@ static int zhpe_mmap(const struct zhpeq_mr_desc_v1 *desc_orig,
                      struct zhpeq_mmap_desc **zmdesc_out)
 {
     int                 ret = -ENOMEM;
-    struct zdom_data    *bdom = desc_orig->hdr.zdomi->backend_data;
-    struct zdom_node    *node = &bdom->nodes[desc_orig->open_idx];
+    struct zqdom_data   *bdom = desc2bdom(desc_orig);
+    struct zqdom_node   *node = &bdom->nodes[desc_orig->open_idx];
     struct zhpeq_mmap_desc *zmdesc = NULL;
     struct zhpeq_key_data *qkdata = NULL;
     struct zhpeq_mr_desc_v1 *desc;
@@ -1349,7 +1341,7 @@ static int zhpe_qkdata_export(const struct zhpeq_key_data *qkdata,
     return 0;
 }
 
-static void zhpe_print_xq_info(struct zhpeq_xqi *xqi)
+static void zhpe_print_tq_info(struct zhpeq_tqi *tqi)
 {
     zhpeu_print_info("GenZ ASIC backend\n");
 }
@@ -1376,7 +1368,7 @@ static int zhpe_rq_get_addr(struct zhpeq_rqi *rqi, void *sa, size_t *sa_len)
 static char *zhpe_qkdata_id_str(const struct zhpeq_mr_desc_v1 *desc)
 {
     char                *ret = NULL;
-    struct zdom_data    *bdom = desc->hdr.zdomi->backend_data;
+    struct zqdom_data   *bdom = desc2bdom(desc);
     char                uuid_str[37];
 
     if (!(desc->hdr.version & ZHPEQ_MR_VREMOTE))
@@ -1410,8 +1402,8 @@ struct backend_ops ops = {
     .mmap               = zhpe_mmap,
     .mmap_unmap         = zhpe_mmap_unmap,
     .mmap_commit        = zhpe_mmap_commit,
-    .print_xq_info      = zhpe_print_xq_info,
-    .xq_get_addr        = zhpe_get_addr,
+    .print_tq_info      = zhpe_print_tq_info,
+    .rq_get_addr        = zhpe_rq_get_addr,
     .qkdata_id_str      = zhpe_qkdata_id_str,
 };
 
