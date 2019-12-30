@@ -819,7 +819,7 @@ static bool zhpe_rq_epoll_enable(struct zhpeq_rqi *rqi, uint64_t *last,
 
     /* Try to enable the queue in epoll. */
     if (!atm_cmpxchg(&bepoll->rqi[qnum], &rqi_old, rqi))
-        return false;
+        return true;
 
     /* Update head so interrupts can occur. */
     __zhpeq_rq_last_update(&rqi->zrq, last, now);

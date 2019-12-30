@@ -110,6 +110,8 @@ enum zhpeq_backend {
 };
 
 enum {
+    ZHPEQ_PRIO_LO               = ZHPE_PRIO_LO,
+    ZHPEQ_PRIO_HI               = ZHPE_PRIO_HI,
     ZHPEQ_MAX_PRIO              = ZHPE_MAX_PRIO,
     ZHPEQ_MAX_TC                = ZHPE_MAX_TC,
     ZHPEQ_MAX_IMM               = ZHPE_MAX_IMM,
@@ -151,6 +153,17 @@ struct zhpeq_tq;
 
 typedef void (*zhpeq_tq_entry_insert_fn)(struct zhpeq_tq *ztq,
                                          uint16_t reservation16);
+
+extern zhpeq_tq_entry_insert_fn zhpeq_insert_fn;
+
+enum {
+    ZHPEQ_INSERT_CMD    = 0,
+    ZHPEQ_INSERT_MEM,
+    ZHPEQ_INSERT_NONE,
+    ZHPEQ_INSERT_LEN,
+    ZHPEQ_INSERT_SHIFT  = 16,
+};
+
 struct zhpeq_tq {
     struct zhpeq_dom    *zqdom;
     struct zhpe_xqinfo  tqinfo;
@@ -158,7 +171,6 @@ struct zhpeq_tq {
     union zhpe_hw_wq_entry *cmd;
     union zhpe_hw_wq_entry *wq;
     union zhpe_hw_cq_entry *cq;
-    zhpeq_tq_entry_insert_fn insert_hook;
     uint64_t            *free_bitmap;
     void                **ctx;
     union zhpe_hw_wq_entry *mem;
@@ -167,17 +179,7 @@ struct zhpeq_tq {
     uint32_t            cq_head;
 };
 
-enum {
-    ZHPEQ_INSERT_CMD    = 0,
-    ZHPEQ_INSERT_MEM,
-    ZHPEQ_INSERT_HOOK,
-    ZHPEQ_INSERT_LEN,
-    ZHPEQ_INSERT_SHIFT  = 16,
-};
-
 #define ZHPEQ_TQ_RESERVATION_MASK ((1U << ZHPEQ_INSERT_SHIFT) - 1)
-
-extern zhpeq_tq_entry_insert_fn zhpeq_insert[];
 
 struct zhpeq_rq {
     struct zhpeq_dom    *zqdom;
@@ -299,7 +301,7 @@ void zhpeq_tq_commit(struct zhpeq_tq *ztq);
 
 static inline void zhpeq_tq_insert(struct zhpeq_tq *ztq, int32_t reservation)
 {
-    zhpeq_insert[reservation >> ZHPEQ_INSERT_SHIFT](ztq, reservation);
+    zhpeq_insert_fn[reservation >> ZHPEQ_INSERT_SHIFT](ztq, reservation);
 }
 
 static inline void zhpeq_tq_set_context(struct zhpeq_tq *ztq,
@@ -533,7 +535,7 @@ static inline bool zhpeq_rq_epoll_check(struct zhpeq_rq *zrq,
      * If epoll_enabled is true at this point, it should be safe to rely on
      * epoll, if not, then continue using zhpeq_rq_entry(). Note that
      * spurious epoll_events are possible, especially after
-     * zhpeq_rq_epoll_check() is called.
+     * zhpeq_rq_epoll_enable() is called.
      */
 
     return ((int64_t)(now - atm_load_rlx(last)) > zrq->epoll_threshold_cycles);

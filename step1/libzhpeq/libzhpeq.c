@@ -64,8 +64,12 @@ static void cmd_insert_hook(struct zhpeq_tq *ztq, uint16_t reservation16)
     ztq->insert_hook(ztq, reservation16);
 }
 
-zhpeq_tq_entry_insert_fn zhpeq_insert[ZHPEQ_INSERT_LEN] = {
-    [ZHPEQ_INSERT_HOOK] = cmd_insert_hook,
+static insert_none(struct zhpeq_tq *ztq, uint16_t reservation16)
+{
+}
+
+static zhpeq_tq_entry_insert_fn zhpeq_insert_fn[ZHPEQ_INSERT_LEN] = {
+    [ZHPEQ_INSERT_NONE] = insert_none,
 };
 
 void                    (*zhpeq_mcommit)(void);
@@ -167,8 +171,8 @@ static void __attribute__((constructor)) lib_init(void)
     uint                edx;
 
     /* Defaults for Carbon. */
-    zhpeq_insert[ZHPEQ_INSERT_CMD] = cmd_insert64;
-    zhpeq_insert[ZHPEQ_INSERT_MEM] = mem_insert64;
+    zhpeq_insert_fn[ZHPEQ_INSERT_CMD] = cmd_insert64;
+    zhpeq_insert_fn[ZHPEQ_INSERT_MEM] = mem_insert64;
     zhpeq_mcommit = no_mcommit;
 
     /*
@@ -183,7 +187,7 @@ static void __attribute__((constructor)) lib_init(void)
     if (__get_cpuid_count(CPUID_0000_0007, CPUID_0000_0007_SUB_0,
                           &eax, &ebx, &ecx, &edx) &&
         (ebx & CPUID_0000_0007_SUB_0_EBX_AVX2)) {
-        zhpeq_insert[ZHPEQ_INSERT_MEM] = mem_insert256;
+        zhpeq_insert_fn[ZHPEQ_INSERT_MEM] = mem_insert256;
         /*
          * We assume the driver enabled mcommit if it is possible.
          * Since mcommit is supported on Rome and not on Naples, I'll
@@ -192,12 +196,12 @@ static void __attribute__((constructor)) lib_init(void)
         if (__get_cpuid(CPUID_8000_0008, &eax, &ebx, &ecx, &edx) &&
             (ebx & CPUID_8000_0008_EBX_MCOMMIT)) {
             zhpeq_mcommit = do_mcommit;
-            zhpeq_insert[ZHPEQ_INSERT_CMD] = cmd_insert256;
+            zhpeq_insert_fn[ZHPEQ_INSERT_CMD] = cmd_insert256;
         } else
-            zhpeq_insert[ZHPEQ_INSERT_CMD] = cmd_insert128;
+            zhpeq_insert_fn[ZHPEQ_INSERT_CMD] = cmd_insert128;
     }
     if (getenv("ZHPEQ_DISABLE_CMD_BUF"))
-        zhpeq_insert[ZHPEQ_INSERT_CMD] = zhpeq_insert[ZHPEQ_INSERT_MEM];
+        zhpeq_insert_fn[ZHPEQ_INSERT_CMD] = zhpeq_insert_fn[ZHPEQ_INSERT_MEM];
 }
 
 #include "../step2/libzhpeq_backend/backend_zhpe.c"
@@ -434,7 +438,8 @@ int zhpeq_tq_alloc(struct zhpeq_dom *zqdom, int cmd_qlen, int cmp_qlen,
     if (!tqi)
         goto done;
     ztq = &tqi->ztq;
-    tqi->ztq.zqdom = zqdom;
+    zrq->zqdom = zqdom;
+    memcpy(ztq->insert_fn, insert_fn, sizeof(ztq->insert_fn));
     tqi->dev_fd = -1;
 
     /*
