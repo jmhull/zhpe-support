@@ -55,24 +55,23 @@ static const char *cpuinfo_delim = " \t\n";
 struct zhpeu_init_time  *zhpeu_init_time;
 static struct zhpeu_init_time  init_time;
 
-static struct zhpeu_atm_lifo_head atm_dummy;
+static __int128                 atm_dummy;
 
 static void __attribute__((constructor)) lib_init(void)
 {
+    __int128            old;
+    __int128            new;
     long                rcl;
-    struct zhpeu_atm_lifo_head oldh;
-    struct zhpeu_atm_lifo_head newh;
     struct zhpeu_init_time *oldi;
 
     /*
      * Run only once and force __atomic_load_16 and
      * __atomic_compare_exchange_16 to be linked.
      */
-    oldh = atm_load_rlx(&atm_dummy);
-    newh.ptr = NULL;
-    newh.seq = oldh.seq + 1;
-    atm_cmpxchg(&atm_dummy, &oldh, newh);
-    if (oldh.seq) {
+    old = atm_load_rlx(&atm_dummy);
+    new = old + 1;
+    atm_cmpxchg(&atm_dummy, &old, new);
+    if (old) {
         /* Wait for global initialization to complete. */
         while (!atm_load_rlx(&zhpeu_init_time))
             yield();
@@ -1557,4 +1556,8 @@ void zhpeu_debug_log(void *vlog, const char *str, uint line,
     rec->v[4] = v4;
 }
 
-
+void zhpeu_assert_fail(const char *expr, const char *func, uint line)
+{
+    zhpeu_print_err("assertion %s failed at %s,%u\n", expr, func, line);
+    abort();
+}

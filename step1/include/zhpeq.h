@@ -154,7 +154,7 @@ struct zhpeq_tq;
 typedef void (*zhpeq_tq_entry_insert_fn)(struct zhpeq_tq *ztq,
                                          uint16_t reservation16);
 
-extern zhpeq_tq_entry_insert_fn zhpeq_insert_fn;
+extern zhpeq_tq_entry_insert_fn zhpeq_insert_fn[];
 
 enum {
     ZHPEQ_INSERT_CMD    = 0,
@@ -201,7 +201,8 @@ struct zhpeq_rx_oos {
 struct zhpeq_rx_seq {
     struct zhpeq_rx_oos *rx_oos_list;
     struct zhpeq_rx_oos *(*alloc)(struct zhpeq_rx_seq *zseq);
-    void                (*free)(void *rx_oos);
+    void                (*free)(struct zhpeq_rx_seq *zseq,
+                                struct zhpeq_rx_oos *rx_oos);
     uint64_t            rx_oos_cnt;
     uint32_t            rx_oos_base_seq;
     uint32_t            rx_oos_max;
@@ -274,24 +275,24 @@ static inline void qcmwrite64(uint64_t value, volatile void *qcm, size_t off)
     iowrite64(value, (char *)qcm + off);
 }
 
-int32_t zhpeq_tq_reserve_type(struct zhpeq_tq *ztq, int32_t cmd_type);
+#define ZHPEQ_TQ_RESERVE_CMD_OK         (~(uint64_t)0)
+#define ZHPEQ_TQ_RESERVE_MEM_ONLY                                       \
+    (~(uint64_t)((1UL << ZHPE_XDM_QCM_CMD_BUF_COUNT) - 1))
+
+int32_t zhpeq_tq_reserve_type(struct zhpeq_tq *ztq, uint64_t type_mask);
 
 static inline int32_t zhpeq_tq_reserve(struct zhpeq_tq *ztq)
 {
     /*
-     * Non-fence case: cmd buffers can be used.
-     *
      * Fence operations only work on memory queue ops, so call
-     * zhpeq_tq_reserve_type(ztq, ZHPEQ_INSERT_MEM) when using hardware
+     * zhpeq_tq_reserve_type(ztq, ZHPEQ_TQ_RESERVE_MEM_ONLY) when using hardware
      * fence.
      */
-    return zhpeq_tq_reserve_type(ztq, ZHPEQ_INSERT_CMD);
+    return zhpeq_tq_reserve_type(ztq, ZHPEQ_TQ_RESERVE_CMD_OK);
 }
 
-static inline void zhpeq_tq_unreserve(struct zhpeq_tq *ztq, int32_t reservation)
+static inline void zhpeq_tq_unreserve(struct zhpeq_tq *ztq, uint16_t index)
 {
-    uint16_t            index = (uint16_t)reservation;
-
     barrier();
     ztq->free_bitmap[index >> ZHPEQ_BITMAP_SHIFT] |=
         ((uint64_t)1 << (index & (ZHPEQ_BITMAP_BITS - 1)));
@@ -412,9 +413,8 @@ static inline struct zhpe_cq_entry *zhpeq_tq_cq_entry(struct zhpeq_tq *ztq)
     struct zhpe_cq_entry *cqe = zhpeq_q_entry(ztq->cq, qindex, qmask);
 
     /* likely() to optimize the success case. */
-    if (likely(zhpeq_cmp_valid(cqe, qindex, qmask))) {
+    if (likely(zhpeq_cmp_valid(cqe, qindex, qmask)))
         return cqe;
-    }
 
     return NULL;
 }

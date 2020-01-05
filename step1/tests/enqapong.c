@@ -187,7 +187,7 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start,
     msg->msg_seq = msg_seq;
     msg->tx_seq = conn->tx_seq++;
     msg->flag = flag;
-    zhpeq_tq_insert(ztq, ret, false);
+    zhpeq_tq_insert(ztq, ret);
     zhpeq_tq_commit(ztq);
     conn->tx_avail--;
     zhpeu_timing_update(&conn->tx_lat, get_cycles(NULL) - start);
@@ -297,6 +297,11 @@ static void cycles_delay(uint64_t start_cyc, uint64_t delay_cyc)
 static struct zhpeq_rx_oos *rx_oos_alloc(struct zhpeq_rx_seq *zseq)
 {
     return malloc(sizeof(*zseq->rx_oos_list));
+}
+
+static void rx_oos_free(struct zhpeq_rx_seq *zseq, struct zhpeq_rx_oos *rx_oos)
+{
+    free(rx_oos);
 }
 
 static_assert(sizeof(struct enqa_msg) <= sizeof(struct zhpe_enqa_payload),
@@ -536,7 +541,7 @@ static int do_nop(struct stuff *conn, uint ops)
         wqe = zhpeq_tq_get_wqe(ztq, ret);
         zhpeq_tq_nop(wqe, 0);
         start = get_cycles(NULL);
-        zhpeq_tq_insert(ztq, ret, false);
+        zhpeq_tq_insert(ztq, ret);
         zhpeq_tq_commit(ztq);
         while (!(cqe = zhpeq_tq_cq_entry(ztq)));
         zhpeu_timing_update(&conn->tx_cmp, get_cycles(NULL) - start);
@@ -884,7 +889,7 @@ static int do_server_one(const struct args *oargs, int conn_fd)
         .sock_fd        = conn_fd,
         .open_idx       = -1,
         .rx_zseq.alloc  = rx_oos_alloc,
-        .rx_zseq.free   = free,
+        .rx_zseq.free   = rx_oos_free,
     };
     struct cli_wire_msg cli_msg;
 
@@ -988,7 +993,7 @@ static int do_client(const struct args *args)
         .open_idx       = -1,
         .ring_ops       = args->ring_ops,
         .rx_zseq.alloc  = rx_oos_alloc,
-        .rx_zseq.free   = free,
+        .rx_zseq.free   = rx_oos_free,
     };
     struct cli_wire_msg cli_msg;
 

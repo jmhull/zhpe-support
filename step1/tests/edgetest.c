@@ -279,7 +279,7 @@ static int ztq_rma_op(struct zhpeq_tq *ztq, bool read, void *lcl_buf,
         memcpy(zhpeq_tq_puti(wqe, 0, len, rem_zaddr), lcl_buf, len);
     else
         zhpeq_tq_put(wqe, 0, lcl_zaddr, len, rem_zaddr);
-    zhpeq_tq_insert(ztq, ret, false);
+    zhpeq_tq_insert(ztq, ret);
     zhpeq_tq_commit(ztq);
     while (!(ret = ztq_completions(ztq)));
     if (ret > 0 && !expected_saw("completions", 1, ret))

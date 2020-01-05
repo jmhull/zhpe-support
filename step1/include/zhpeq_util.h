@@ -497,50 +497,6 @@ char *zhpeu_sockaddr_str(const void *addr);
 #define atm_inc(_p)     atm_add(_p, 1)
 #define atm_dec(_p)     atm_sub(_p, 1)
 
-struct zhpeu_atm_lifo_head {
-    struct zhpeu_atm_list_next *ptr;
-    uintptr_t            seq;
-} INT128_ALIGNED;
-
-struct zhpeu_atm_list_next {
-    struct zhpeu_atm_list_next *next;
-} INT64_ALIGNED;
-
-static inline void zhpeu_atm_lifo_push(struct zhpeu_atm_lifo_head *head,
-                                       struct zhpeu_atm_list_next *new)
-{
-    struct zhpeu_atm_lifo_head oldh;
-    struct zhpeu_atm_lifo_head newh;
-
-    newh.ptr = new;
-    for (oldh = atm_load_rlx(head);;) {
-        new->next = oldh.ptr;
-        newh.seq = oldh.seq + 1;
-        if (atm_cmpxchg(head, &oldh, newh))
-            break;
-    }
-}
-
-static inline struct zhpeu_atm_list_next *
-zhpeu_atm_lifo_pop(struct zhpeu_atm_lifo_head *head)
-{
-    struct zhpeu_atm_list_next *ret;
-    struct zhpeu_atm_lifo_head oldh;
-    struct zhpeu_atm_lifo_head newh;
-
-    for (oldh = atm_load_rlx(head);;) {
-        ret = oldh.ptr;
-        if (!ret)
-            break;
-        newh.ptr = ret->next;
-        newh.seq = oldh.seq + 1;
-        if (atm_cmpxchg(head, &oldh, newh))
-            break;
-    }
-
-    return ret;
-}
-
 struct zhpeu_init_time {
     uint64_t            (*get_cycles)(volatile uint32_t *cpup);
     uint64_t            freq;
@@ -1120,6 +1076,15 @@ struct {                                                        \
 void zhpeu_debug_log(void *vlog, const char *str, uint line,
                      uint64_t v0, uint64_t v1, uint64_t v2, uint64_t v3,
                      uint64_t v4, uint64_t cycles);
+
+void zhpeu_assert_fail(const char *expr, const char *func, uint line);
+
+/* Not affected by NDEBUG */
+#define assert_always(_expr)                                    \
+do {                                                            \
+        if (unlikely(_expr))                                    \
+            zhpeu_assert_fail(#_expr, __func__, __LINE__);      \
+} while (0)
 
 #ifdef _ZHPEQ_TEST_COMPAT_
 

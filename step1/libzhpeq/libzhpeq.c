@@ -59,16 +59,11 @@ static pthread_mutex_t  init_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static struct zhpeq_attr b_attr;
 
-static void cmd_insert_hook(struct zhpeq_tq *ztq, uint16_t reservation16)
-{
-    ztq->insert_hook(ztq, reservation16);
-}
-
-static insert_none(struct zhpeq_tq *ztq, uint16_t reservation16)
+static void insert_none(struct zhpeq_tq *ztq, uint16_t reservation16)
 {
 }
 
-static zhpeq_tq_entry_insert_fn zhpeq_insert_fn[ZHPEQ_INSERT_LEN] = {
+zhpeq_tq_entry_insert_fn zhpeq_insert_fn[ZHPEQ_INSERT_LEN] = {
     [ZHPEQ_INSERT_NONE] = insert_none,
 };
 
@@ -438,8 +433,7 @@ int zhpeq_tq_alloc(struct zhpeq_dom *zqdom, int cmd_qlen, int cmp_qlen,
     if (!tqi)
         goto done;
     ztq = &tqi->ztq;
-    zrq->zqdom = zqdom;
-    memcpy(ztq->insert_fn, insert_fn, sizeof(ztq->insert_fn));
+    ztq->zqdom = zqdom;
     tqi->dev_fd = -1;
 
     /*
@@ -562,7 +556,7 @@ int zhpeq_tq_backend_close(struct zhpeq_tq *ztq, int open_idx)
     return ret;
 }
 
-int32_t zhpeq_tq_reserve_type(struct zhpeq_tq *ztq, int32_t cmd_type)
+int32_t zhpeq_tq_reserve_type(struct zhpeq_tq *ztq, uint64_t type_mask)
 {
     int32_t             ret;
     uint                i;
@@ -572,14 +566,14 @@ int32_t zhpeq_tq_reserve_type(struct zhpeq_tq *ztq, int32_t cmd_type)
         goto done;
     }
 
-    ret = ffs64(ztq->free_bitmap[0]);
+    ret = ffs64(ztq->free_bitmap[0] & type_mask);
     if (likely(ret)) {
         ret--;
         ztq->free_bitmap[0] &= ~((uint64_t)1 << ret);
-        if (unlikely(ret >= ZHPE_XDM_QCM_CMD_BUF_COUNT))
-            ret |= (ZHPEQ_INSERT_MEM << 16);
+        if (likely(ret < ZHPE_XDM_QCM_CMD_BUF_COUNT))
+            ret |= (ZHPEQ_INSERT_CMD << 16);
         else
-            ret |= (cmd_type << 16);
+            ret |= (ZHPEQ_INSERT_MEM << 16);
     } else {
         for (i = 1; i < (ztq->tqinfo.cmdq.ent >> ZHPEQ_BITMAP_SHIFT); i++) {
             ret = ffs64(ztq->free_bitmap[i]);
@@ -1049,7 +1043,7 @@ bool zhpeq_rx_oos_spill(struct zhpeq_rx_seq *zseq, uint32_t msgs,
                          (uintptr_t)rx_oos, (uintptr_t)&zseq->rx_oos_list,
                          (uintptr_t)rx_oos->next, 0);
         zseq->rx_oos_list = rx_oos->next;
-        zseq->free(rx_oos);
+        zseq->free(zseq, rx_oos);
     }
 
     return (msgs != msgs_orig);
