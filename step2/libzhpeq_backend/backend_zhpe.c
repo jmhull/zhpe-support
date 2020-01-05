@@ -628,6 +628,7 @@ static int zhpe_rq_epoll(struct zhpeq_rq_epolli *epolli,
     uint32_t            i;
     struct zhpeq_rqi    *rqi;
     int                 n_events;
+    size_t              res;
     struct epoll_event  events[ZHPE_MAX_IRQS];
     char                pipe_buf[32];
 
@@ -659,7 +660,12 @@ static int zhpe_rq_epoll(struct zhpeq_rq_epolli *epolli,
         }
         if (irq >= ZHPE_MAX_IRQS) {
             /* Pipe: just used to wake us up, empty it. */
-            (void)read(bepoll->pipe_fds[0], pipe_buf, sizeof(pipe_buf));
+            res = read(bepoll->pipe_fds[0], pipe_buf, sizeof(pipe_buf));
+            if (res == -1) {
+                ret = -errno;
+                if (ret != -EAGAIN && ret != -EWOULDBLOCK)
+                    goto done_locked;
+            }
             continue;
         }
         atm_store(&shared_local->handled_counter[irq],
