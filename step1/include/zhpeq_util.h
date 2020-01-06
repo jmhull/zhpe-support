@@ -1082,8 +1082,8 @@ void zhpeu_assert_fail(const char *expr, const char *func, uint line);
 /* Not affected by NDEBUG */
 #define assert_always(_expr)                                    \
 do {                                                            \
-        if (unlikely(_expr))                                    \
-            zhpeu_assert_fail(#_expr, __func__, __LINE__);      \
+    if (unlikely(!(_expr)))                                     \
+        zhpeu_assert_fail(#_expr, __func__, __LINE__);          \
 } while (0)
 
 #ifdef _ZHPEQ_TEST_COMPAT_
