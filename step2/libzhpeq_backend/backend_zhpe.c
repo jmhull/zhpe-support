@@ -1354,21 +1354,21 @@ static void zhpe_print_tq_info(struct zhpeq_tqi *tqi)
 
 static int zhpe_rq_get_addr(struct zhpeq_rqi *rqi, void *sa, size_t *sa_len)
 {
-    int                 ret = -EOVERFLOW;
-    struct sockaddr_zhpe *sz = sa;
+    struct sockaddr_zhpe sz;
 
-    if (*sa_len < sizeof(*sz))
+    /* Semantics expected by libfabric. !sa_len checked in libzhpeq.c. */
+    if (!sa)
         goto done;
 
-    sz->sz_family = AF_ZHPE;
-    memcpy(sz->sz_uuid, &zhpeq_uuid, sizeof(sz->sz_uuid));
-    sz->sz_queue = rqi->zrq.rqinfo.rspctxid;
-    ret = 0;
+    sz.sz_family = AF_ZHPE;
+    memcpy(sz.sz_uuid, &zhpeq_uuid, sizeof(sz.sz_uuid));
+    sz.sz_queue = rqi->zrq.rqinfo.rspctxid;
+    memcpy(sa, &sz, min(*sa_len, sizeof(sz)));
 
  done:
-    *sa_len = sizeof(*sz);
+    *sa_len = sizeof(sz);
 
-    return ret;
+    return 0;
 }
 
 static char *zhpe_qkdata_id_str(const struct zhpeq_mr_desc_v1 *desc)

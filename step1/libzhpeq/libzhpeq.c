@@ -907,7 +907,7 @@ int zhpeq_rq_get_addr(struct zhpeq_rq *zrq, void *sa, size_t *sa_len)
     ssize_t             ret = -EINVAL;
     struct zhpeq_rqi    *rqi = container_of(zrq, struct zhpeq_rqi, zrq);
 
-    if (!zrq || !sa || !sa_len)
+    if (!zrq || !sa_len)
         goto done;
 
     ret = zhpe_rq_get_addr(rqi, sa, sa_len);
