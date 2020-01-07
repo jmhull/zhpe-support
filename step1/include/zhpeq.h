@@ -237,7 +237,7 @@ static inline int zhpeq_lcl_key_access(const struct zhpeq_key_data *qkdata,
     return 0;
 }
 
-int zhpeq_init(int api_version);
+int zhpeq_init(int api_version, struct zhpeq_attr *attr);
 
 int zhpeq_query_attr(struct zhpeq_attr *attr);
 
@@ -602,8 +602,10 @@ static inline bool zhpeq_is_asic(void)
     return true;
 }
 
-int zhpeq_getzaddr(const char *host, const char *service,
-                   struct sockaddr_zhpe *sz);
+int zhpeq_get_zaddr(const char *node, const char *service,
+                    struct sockaddr_zhpe *sz);
+
+int zhpeq_get_src_zaddr(struct sockaddr_zhpe *sz);
 
 /* Info/debugging */
 

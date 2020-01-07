@@ -39,7 +39,7 @@
 
 #include <limits.h>
 
-static struct zhpeq_attr   attr;
+static struct zhpeq_attr zhpeq_attr;
 
 static void usage(bool help) __attribute__ ((__noreturn__));
 
@@ -54,7 +54,7 @@ static void usage(bool help)
         "         specified, qlen will be selected randomly and [-s]"
         " allows\n"
         "         specifying a seed for random().\n",
-        appname, attr.z.max_tx_queues, attr.z.max_tx_qlen);
+        appname, zhpeq_attr.z.max_tx_queues, zhpeq_attr.z.max_tx_qlen);
 
     exit(255);
 }
@@ -99,18 +99,16 @@ static int qcm_ok(volatile void *qcm, struct zhpe_xqinfo *info, size_t i,
         check_ptr = (void *)((char *)qcm + check_off);
         check_val = *check_ptr;
         if (check_val == 0 && (check_val & 0x3F)) {
-            print_err("Offset 0x%Lx unexpected value 0x%Lx\n",
-                      (ullong)check_off, (ullong)check_val);
+            print_err("Offset 0x%" PRIx64 " unexpected value 0x%" PRIx64 "\n",
+                      check_off, check_val);
             goto done;
         }
         check_off = 8;
         check_ptr = (void *)((char *)qcm + check_off);
         check_val = *check_ptr;
-        if (check_val == 0 && (check_val & 0x3F)) {
-            print_err("Offset 0x%Lx unexpected value 0x%Lx\n",
-                      (ullong)check_off, (ullong)check_val);
+            print_err("Offset 0x%" PRIx64 " unexpected value 0x%" PRIx64 "\n",
+                      check_off, check_val);
             goto done;
-        }
         check_off = 0x10;
         check_ptr = (void *)((char *)qcm + check_off);
         check_val = *check_ptr;
@@ -129,8 +127,8 @@ static int qcm_ok(volatile void *qcm, struct zhpe_xqinfo *info, size_t i,
             ((check_val >> 24) & 0xFE) != 0x40 ||
             ((check_val >> 32) & 0xFFFF) == 0 ||
             (check_val >> 48) != 0) {
-            print_err("Offset 0x%Lx unexpected value 0x%Lx\n",
-                      (ullong)check_off, (ullong)check_val);
+            print_err("Offset 0x%" PRIx64 " unexpected value 0x%" PRIx64 "\n",
+                      check_off, check_val);
             goto done;
         }
         check_off = 0x20;
@@ -198,18 +196,13 @@ int main(int argc, char **argv)
 
     zhpeq_util_init(argv[0], LOG_DEBUG, false);
 
-    rc = zhpeq_init(ZHPEQ_API_VERSION);
+    rc = zhpeq_init(ZHPEQ_API_VERSION, &zhpeq_attr);
     if (rc < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_init", "", rc);
         goto done;
     }
 
-    rc = zhpeq_query_attr(&attr);
-    if (rc < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_query_attr", "", rc);
-        goto done;
-    }
-    zhpe = (attr.backend == ZHPEQ_BACKEND_ZHPE);
+    zhpe = zhpeq_is_asic();
 
     if (argc == 1)
         usage(true);
@@ -247,7 +240,7 @@ int main(int argc, char **argv)
 
     if (parse_kb_uint64_t(__func__, __LINE__, "queues",
                           argv[optind++], &u64, 0,
-                          1, attr.z.max_tx_queues, 0) < 0)
+                          1, zhpeq_attr.z.max_tx_queues, 0) < 0)
         usage(false);
 
     queues = u64;
@@ -255,7 +248,7 @@ int main(int argc, char **argv)
     if (argc > 1) {
         if (parse_kb_uint64_t(__func__, __LINE__, "qlen",
                               argv[optind++], &u64, 0,
-                              2, attr.z.max_tx_qlen, 0) < 0)
+                              2, zhpeq_attr.z.max_tx_qlen, 0) < 0)
             usage(false);
         qlen = u64;
     }
@@ -287,8 +280,8 @@ int main(int argc, char **argv)
         i = shuffle[h];
         if (ztq[i])
             print_err("%s,%u:random_array() broken\n", __func__, __LINE__);
-        cmd_len = (qlen ?: random_range(2, attr.z.max_tx_qlen));
-        cmp_len = (qlen ?: random_range(2, attr.z.max_tx_qlen));
+        cmd_len = (qlen ?: random_range(2, zhpeq_attr.z.max_tx_qlen));
+        cmp_len = (qlen ?: random_range(2, zhpeq_attr.z.max_tx_qlen));
         rc = zhpeq_tq_alloc(zdom, cmd_len, cmp_len, i & 0xF, i & 0x1, 0,
                             &ztq[i]);
         if (rc < 0) {

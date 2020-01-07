@@ -246,18 +246,22 @@ void zhpeq_register_backend(enum zhpe_backend backend, struct backend_ops *ops)
 
 #endif
 
-int zhpeq_init(int api_version)
+int zhpeq_init(int api_version, struct zhpeq_attr *attr)
 {
     int                 ret = -EINVAL;
     static int          init_status = 1;
 
-    if (init_status > 0) {
-        if (!zhpeu_expected_saw("api_version", ZHPEQ_API_VERSION, api_version))
-            goto done;
+    if (!zhpeu_expected_saw("api_version", ZHPEQ_API_VERSION, api_version) ||
+        !attr)
+        goto done;
 
+    if (init_status > 0) {
         mutex_lock(&init_mutex);
-        ret = zhpe_lib_init(&b_attr);
-        init_status = (ret <= 0 ? ret : 0);
+        if (init_status > 0) {
+            ret = zhpe_lib_init(&b_attr);
+            init_status = (ret <= 0 ? ret : 0);
+            *attr = b_attr;
+        }
         mutex_unlock(&init_mutex);
     }
     ret = init_status;
@@ -1427,13 +1431,24 @@ int zhpeq_getzaddr(const char *host, const char *service,
 
 #else
 
-int zhpeq_getzaddr(const char *host, const char *service,
+int zhpeq_get_zaddr(const char *node, const char *service,
                    struct sockaddr_zhpe *sz)
 {
-    if (!host || !service || !sz)
+    if (!node || !service || !sz)
         return -EINVAL;
 
     return -ENOSYS;
+}
+
+int zhpeq_get_src_zaddr(struct sockaddr_zhpe *sz)
+{
+    if (!sz)
+        return -EINVAL;
+
+    memset(sz, 0, sizeof(*sz));
+    memcpy(sz->sz_uuid, zhpeq_uuid, sizeof(sz->sz_uuid));
+
+    return 0;
 }
 
 #endif

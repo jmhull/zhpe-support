@@ -1092,15 +1092,9 @@ int main(int argc, char **argv)
 
     zhpeu_util_init(argv[0], LOG_INFO, false);
 
-    rc = zhpeq_init(ZHPEQ_API_VERSION);
+    rc = zhpeq_init(ZHPEQ_API_VERSION, &zhpeq_attr);
     if (rc < 0) {
         zhpeu_print_func_err(__func__, __LINE__, "zhpeq_init", "", rc);
-        goto done;
-    }
-
-    rc = zhpeq_query_attr(&zhpeq_attr);
-    if (rc < 0) {
-        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_query_attr", "", rc);
         goto done;
     }
 

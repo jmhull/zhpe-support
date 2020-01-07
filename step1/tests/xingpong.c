@@ -49,7 +49,9 @@
 #define RX_WINDOW       (64)
 #define TX_WINDOW       (64)
 #define L1_CACHELINE    ((size_t)64)
-#define ZXQ_LEN         (1023)
+#define ZTQ_LEN         (1023)
+
+static struct zhpeq_attr zhpeq_attr;
 
 struct cli_wire_msg {
     uint64_t            ring_entry_len;
@@ -725,21 +727,14 @@ int do_ztq_setup(struct stuff *conn)
     const struct args   *args = conn->args;
     union sockaddr_in46 sa;
     size_t              sa_len = sizeof(sa);
-    struct zhpeq_attr   ztq_attr;
-
-    ret = zhpeq_query_attr(&ztq_attr);
-    if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_query_attr", "", ret);
-        goto done;
-    }
 
     ret = -EINVAL;
     conn->tx_avail = args->tx_avail;
     if (conn->tx_avail) {
-        if (conn->tx_avail > ztq_attr.z.max_tx_qlen)
+        if (conn->tx_avail > zhpeq_attr.z.max_tx_qlen)
             goto done;
     } else
-        conn->tx_avail = ZXQ_LEN;
+        conn->tx_avail = ZTQ_LEN;
 
     /* Allocate domain. */
     ret = zhpeq_domain_alloc(&conn->zdom);
@@ -1015,7 +1010,7 @@ int main(int argc, char **argv)
 
     zhpeq_util_init(argv[0], LOG_INFO, false);
 
-    rc = zhpeq_init(ZHPEQ_API_VERSION);
+    rc = zhpeq_init(ZHPEQ_API_VERSION, &zhpeq_attr);
     if (rc < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_init", "", rc);
         goto done;

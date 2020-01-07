@@ -34,9 +34,11 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <internal.h>
+#include <zhpeq.h>
 
 #include <limits.h>
+
+static struct zhpeq_attr zhpeq_attr;
 
 static char buf[4];
 
@@ -74,7 +76,6 @@ int main(int argc, char **argv)
     uint32_t            match;
     uint                i;
     uint                j;
-    struct zhpeq_attr   attr;
     bool                zhpe;
 
     zhpeq_util_init(argv[0], LOG_DEBUG, false);
@@ -82,18 +83,13 @@ int main(int argc, char **argv)
     if (argc != 1)
         usage(false);
 
-    rc = zhpeq_init(ZHPEQ_API_VERSION);
+    rc = zhpeq_init(ZHPEQ_API_VERSION, &zhpeq_attr);
     if (rc < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_init", "", rc);
         goto done;
     }
 
-    rc = zhpeq_query_attr(&attr);
-    if (rc < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_query_attr", "", rc);
-        goto done;
-    }
-    zhpe = (attr.backend == ZHPEQ_BACKEND_ZHPE);
+    zhpe = zhpeq_is_asic();
 
     rc = zhpeq_domain_alloc(&zdom);
     if (rc < 0) {
