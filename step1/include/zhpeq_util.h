@@ -1063,7 +1063,7 @@ struct zhpeu_debug_rec {
 struct zhpeu_debug_log {
     uint                idx;
     uint                mask;
-    struct zhpeu_debug_rec ent[0];
+    struct zhpeu_debug_rec ent[];
 };
 
 #define ZHPEU_DECLARE_DEBUG_LOG(_name, _order)                  \
