@@ -1362,7 +1362,7 @@ static int zhpe_rq_get_addr(struct zhpeq_rqi *rqi, void *sa, size_t *sa_len)
 
     sz.sz_family = AF_ZHPE;
     memcpy(sz.sz_uuid, &zhpeq_uuid, sizeof(sz.sz_uuid));
-    sz.sz_queue = rqi->zrq.rqinfo.rspctxid;
+    sz.sz_queue = htonl(rqi->zrq.rqinfo.rspctxid);
     memcpy(sa, &sz, min(*sa_len, sizeof(sz)));
 
  done:
