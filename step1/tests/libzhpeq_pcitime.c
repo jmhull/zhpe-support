@@ -38,6 +38,8 @@
 
 #include <limits.h>
 
+static struct zhpeq_attr zhpeq_attr;
+
 static void usage(bool help) __attribute__ ((__noreturn__));
 
 static void usage(bool help)
@@ -72,13 +74,19 @@ int main(int argc, char **argv)
 {
     int                 ret = 1;
     struct zhpeq_rq     *zrq = NULL;
-    struct zhpeq_dom    *zdom = NULL;
+    struct zhpeq_dom    *zqdom = NULL;
     uint64_t            u64;
     size_t              ops;
     int                 qlen;
     int                 rc;
 
     zhpeq_util_init(argv[0], LOG_DEBUG, false);
+
+    rc = zhpeq_init(ZHPEQ_API_VERSION, &zhpeq_attr);
+    if (rc < 0) {
+        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_init", "", rc);
+        goto done;
+    }
 
     if (argc == 1)
         usage(true);
@@ -92,14 +100,14 @@ int main(int argc, char **argv)
 
     ops = u64;
 
-    rc = zhpeq_domain_alloc(&zdom);
+    rc = zhpeq_domain_alloc(&zqdom);
     if (rc < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_domain_alloc", "", rc);
         goto done;
     }
 
     qlen = 63;
-    rc = zhpeq_rq_alloc(zdom, qlen, 0, &zrq);
+    rc = zhpeq_rq_alloc(zqdom, qlen, 0, &zrq);
     if (rc < 0) {
         print_func_errn(__func__, __LINE__, "zhpeq_rq_alloc", qlen, false, rc);
         goto done;
@@ -109,7 +117,7 @@ int main(int argc, char **argv)
 
  done:
     zhpeq_rq_free(zrq);
-    zhpeq_domain_free(zdom);
+    zhpeq_domain_free(zqdom);
 
     printf("%s:done, ret = %d\n", appname, ret);
 
