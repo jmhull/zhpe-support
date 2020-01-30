@@ -854,7 +854,7 @@ bool zhpe_stats_init(const char *stats_dir, const char *stats_unique)
     if (sim_api_is_sim())
         zhpe_stats_ops = &stats_ops_sim;
 #endif
-#ifdef LIKWID_PERFMON
+#ifdef LIKWID_PERFMONb
     if (zhpe_stats_ops == &zhpe_stats_nops) {
         zhpe_stats_ops = &stats_ops_likwid;
         LIKWID_MARKER_INIT;

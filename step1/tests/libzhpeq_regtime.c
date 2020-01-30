@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 Hewlett Packard Enterprise Development LP.
+ * Copyright (C) 2017-2020 Hewlett Packard Enterprise Development LP.
  * All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -83,7 +83,7 @@ void dump_data(const char *label, uint64_t *delta, uint64_t ops, uint64_t size)
 int main(int argc, char **argv)
 {
     int                 ret = 255;
-    struct zhpeq_dom    *zdom = NULL;
+    struct zhpeq_dom    *zqdom = NULL;
     char                *map = NULL;
     uint64_t            i;
     uint64_t            j;
@@ -135,7 +135,7 @@ int main(int argc, char **argv)
 
     ret = 1;
 
-    rc = zhpeq_domain_alloc(&zdom);
+    rc = zhpeq_domain_alloc(&zqdom);
     if (rc < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_domain_alloc", "", rc);
         goto done;
@@ -167,7 +167,7 @@ int main(int argc, char **argv)
     for (size = min_size; size <= max_size; size *= 2) {
         for (i = 0, j = 0; i < ops; i++, j += COUNTERS) {
             start = get_cycles(NULL);
-            rc = zhpeq_mr_reg(zdom, map, size,
+            rc = zhpeq_mr_reg(zqdom, map, size,
                               (ZHPEQ_MR_GET | ZHPEQ_MR_PUT |
                                ZHPEQ_MR_SEND | ZHPEQ_MR_RECV |
                                ZHPEQ_MR_GET_REMOTE | ZHPEQ_MR_PUT_REMOTE),
@@ -210,7 +210,7 @@ int main(int argc, char **argv)
  done:
     if (map)
         munmap(map, req + delta_req);
-    zhpeq_domain_free(zdom);
+    zhpeq_domain_free(zqdom);
 
     printf("%s:done, ret = %d\n", appname, ret);
 

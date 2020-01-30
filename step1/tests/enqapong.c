@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019 Hewlett Packard Enterprise Development LP.
+ * Copyright (C) 2019-2020 Hewlett Packard Enterprise Development LP.
  * All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -90,7 +90,7 @@ struct enqa_msg {
 struct stuff {
     void                (*free)(void *ptr);
     const struct args   *args;
-    struct zhpeq_dom    *zdom;
+    struct zhpeq_dom    *zqdom;
     struct zhpeq_tq     *ztq;
     struct zhpeq_rq     *zrq;
     int                 sock_fd;
@@ -113,9 +113,9 @@ struct stuff {
     size_t              tx_max;
     size_t              rqlen;
     size_t              tqlen;
+    void                *addr_cookie;
     uint32_t            dgcid;
     uint32_t            rspctxid;
-    int                 open_idx;
     uint8_t             qd_last;
     bool                epoll;
 };
@@ -152,11 +152,10 @@ static void stuff_free(struct stuff *stuff)
         return;
 
     zhpeq_rq_epoll_free(stuff->zepoll);
-    if (stuff->open_idx != -1)
-        zhpeq_tq_backend_close(stuff->ztq, stuff->open_idx);
+    zhpeq_domain_remove_addr(stuff->zqdom, stuff->addr_cookie);
     zhpeq_rq_free(stuff->zrq);
     zhpeq_tq_free(stuff->ztq);
-    zhpeq_domain_free(stuff->zdom);
+    zhpeq_domain_free(stuff->zqdom);
 
     FD_CLOSE(stuff->sock_fd);
 }
@@ -791,13 +790,13 @@ static int do_q_setup(struct stuff *conn)
         conn->rqlen = DEFAULT_QLEN;
 
     /* Allocate domain. */
-    ret = zhpeq_domain_alloc(&conn->zdom);
+    ret = zhpeq_domain_alloc(&conn->zqdom);
     if (ret < 0) {
         zhpeu_print_func_err(__func__, __LINE__, "zhpeq_domain_alloc", "", ret);
         goto done;
     }
     /* Allocate zqueues. */
-    ret = zhpeq_tq_alloc(conn->zdom, conn->tqlen, conn->tqlen,
+    ret = zhpeq_tq_alloc(conn->zqdom, conn->tqlen, conn->tqlen,
                          0, 0, 0,  &conn->ztq);
     if (ret < 0) {
         zhpeu_print_func_err(__func__, __LINE__, "zhpeq_tq_alloc", "", ret);
@@ -811,7 +810,7 @@ static int do_q_setup(struct stuff *conn)
     conn->tx_max = conn->tx_avail = conn->tqlen;
     conn->tqlen = conn->ztq->tqinfo.cmdq.ent - 1;
 
-    ret = zhpeq_rq_alloc(conn->zdom, conn->rqlen, 0, &conn->zrq);
+    ret = zhpeq_rq_alloc(conn->zqdom, conn->rqlen, 0, &conn->zrq);
     if (ret < 0) {
         zhpeu_print_func_err(__func__, __LINE__, "zhpeq_rq_alloc", "", ret);
         goto done;
@@ -853,7 +852,7 @@ static int do_q_setup(struct stuff *conn)
         goto done;
     }
 
-    /* Exchange addresses. */
+    /* Exchange addresses and insert the remote address in the domain. */
     ret = zhpeq_rq_xchg_addr(conn->zrq, conn->sock_fd, &sa, &sa_len);
     if (ret < 0) {
         zhpeu_print_func_err(__func__, __LINE__, "zhpeq_tq_xchg_addr", "", ret);
@@ -865,15 +864,12 @@ static int do_q_setup(struct stuff *conn)
     }
     conn->dgcid = zhpeu_uuid_to_gcid(sa.zhpe.sz_uuid);
     conn->rspctxid = sa.zhpe.sz_queue;
-
-    /* Do setup for remote. */
-    ret = zhpeq_tq_backend_open(conn->ztq, &sa);
+    ret = zhpeq_domain_insert_addr(conn->zqdom, &sa, &conn->addr_cookie);
     if (ret < 0) {
-        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_tq_backend_open",
+        zhpeu_print_func_err(__func__, __LINE__, "zhpeq_domain_insert_addr",
                              "", ret);
         goto done;
     }
-    conn->open_idx = ret;
 
  done:
     return ret;
@@ -887,7 +883,6 @@ static int do_server_one(const struct args *oargs, int conn_fd)
     struct stuff        conn = {
         .args           = args,
         .sock_fd        = conn_fd,
-        .open_idx       = -1,
         .rx_zseq.alloc  = rx_oos_alloc,
         .rx_zseq.free   = rx_oos_free,
     };
@@ -990,7 +985,6 @@ static int do_client(const struct args *args)
     struct stuff        conn = {
         .args           = args,
         .sock_fd        = -1,
-        .open_idx       = -1,
         .ring_ops       = args->ring_ops,
         .rx_zseq.alloc  = rx_oos_alloc,
         .rx_zseq.free   = rx_oos_free,

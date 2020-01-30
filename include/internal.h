@@ -70,7 +70,7 @@ struct backend_ops {
     int                 (*tqfree_pre)(struct zhpeq_tqi *tqi);
     int                 (*tqfree)(struct zhpeq_tqi *tqi);
     int                 (*open)(struct zhpeq_tqi *tqi, void *sa);
-    int                 (*close)(struct zhpeq_tqi *tqi, int open_idx);
+    int                 (*close)(struct zhpeq_tqi *tqi, void *open_cookie);
     int                 (*wq_signal)(struct zhpeq_tqi *ztq);
     ssize_t             (*cq_poll)(struct zhpeq_tqi *tqi, size_t len);
     int                 (*mr_reg)(struct zhpeq_domi *zqdomi,
@@ -81,7 +81,8 @@ struct backend_ops {
                                          struct key_data_packed *blob);
     int                 (*zmmu_reg)(struct zhpeq_key_data *qkdata);
     int                 (*zmmu_free)(struct zhpeq_key_data *qkdata);
-    int                 (*fam_qkdata)(struct zhpeq_dom *zqdom, int open_idx,
+    int                 (*fam_qkdata)(struct zhpeq_dom *zqdom,
+                                      void *open_cookie,
                                       struct zhpeq_key_data **qkdata_out,
                                       size_t *n_qkdata_out);
     int                 (*mmap)(const struct zhpeq_key_data *qkdata,
@@ -216,7 +217,7 @@ struct zhpeq_mr_desc_v1 {
     struct zhpeq_mr_desc_common_hdr hdr;
     struct zhpeq_key_data qkdata;
     uint64_t            rsp_zaddr;
-    int                 open_idx;
+    void                *addr_cookie;
 };
 
 union zhpeq_mr_desc {
@@ -261,22 +262,6 @@ static inline bool zrq_check_idle(struct zhpeq_rq *zrq)
                        ZHPE_RDM_QCM_RCV_QUEUE_TAIL_TOGGLE_OFFSET) & qmask);
 
     return (qhead == qtail);
-}
-
-static inline void *tqi2bdom(struct zhpeq_tqi *tqi)
-{
-    struct zhpeq_domi   *zqdomi = container_of(tqi->ztq.zqdom,
-                                               struct zhpeq_domi, zqdom);
-
-    return zqdomi->backend_data;
-}
-
-static inline void *desc2bdom(const struct zhpeq_mr_desc_v1 *desc)
-{
-    struct zhpeq_domi   *zqdomi = container_of(desc->qkdata.zqdom,
-                                               struct zhpeq_domi, zqdom);
-
-    return zqdomi->backend_data;
 }
 
 _EXTERN_C_END

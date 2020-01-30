@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 Hewlett Packard Enterprise Development LP.
+ * Copyright (C) 2017-2020 Hewlett Packard Enterprise Development LP.
  * All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -71,7 +71,7 @@ static void usage(bool help)
 int main(int argc, char **argv)
 {
     int                 ret = 1;
-    struct zhpeq_dom    *zdom = NULL;
+    struct zhpeq_dom    *zqdom = NULL;
     int                 rc;
     uint32_t            match;
     uint                i;
@@ -91,13 +91,13 @@ int main(int argc, char **argv)
 
     zhpe = zhpeq_is_asic();
 
-    rc = zhpeq_domain_alloc(&zdom);
+    rc = zhpeq_domain_alloc(&zqdom);
     if (rc < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_domain_alloc", "", rc);
         goto done;
     }
     for (i = 0; tests[i].buf; i++) {
-        rc = zhpeq_mr_reg(zdom, tests[i].buf, tests[i].len,
+        rc = zhpeq_mr_reg(zqdom, tests[i].buf, tests[i].len,
                           tests[i].qaccess, &tests[i].qk);
         if (rc < 0) {
             print_func_err(__func__, __LINE__, "zhpeq_mr_reg", "", rc);
@@ -124,7 +124,7 @@ int main(int argc, char **argv)
     ret = 0;
 
  done:
-    zhpeq_domain_free(zdom);
+    zhpeq_domain_free(zqdom);
 
     printf("%s:done, ret = %d\n", appname, ret);
 

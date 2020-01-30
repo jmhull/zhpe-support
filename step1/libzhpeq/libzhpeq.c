@@ -309,10 +309,7 @@ int zhpeq_domain_alloc(struct zhpeq_dom **zqdom_out)
         goto done;
     *zqdom_out = NULL;
 
-    ret = -ENOMEM;
-    zqdomi = calloc_cachealigned(1, sizeof(*zqdomi));
-    if (!zqdomi)
-        goto done;
+    zqdomi = xcalloc_cachealigned(1, sizeof(*zqdomi));
 
     ret = zhpe_domain(zqdomi);
 
@@ -322,6 +319,42 @@ int zhpeq_domain_alloc(struct zhpeq_dom **zqdom_out)
     else
         (void)zhpeq_domain_free(&zqdomi->zqdom);
 
+    return ret;
+}
+
+int zhpeq_domain_insert_addr(struct zhpeq_dom *zqdom, void *sa,
+                             void **addr_cookie)
+{
+    int                 ret = -EINVAL;
+    struct zhpeq_domi   *domi = container_of(zqdom, struct zhpeq_domi, zqdom);
+
+    if (!addr_cookie)
+        goto done;
+    *addr_cookie = NULL;
+    if (!zqdom)
+        goto done;
+
+    ret = zhpe_domain_insert_addr(domi, sa, addr_cookie);
+
+ done:
+    return ret;
+}
+
+int zhpeq_domain_remove_addr(struct zhpeq_dom *zqdom, void *addr_cookie)
+{
+    int                 ret = -EINVAL;
+    struct zhpeq_domi   *domi = container_of(zqdom, struct zhpeq_domi, zqdom);
+
+    if (!zqdom)
+        goto done;
+    if (!addr_cookie) {
+        ret = 0;
+        goto done;
+    }
+
+    ret = zhpe_domain_remove_addr(domi, addr_cookie);
+
+ done:
     return ret;
 }
 
@@ -529,34 +562,6 @@ int zhpeq_tq_alloc(struct zhpeq_dom *zqdom, int cmd_qlen, int cmp_qlen,
     else
         (void)zhpeq_tq_free(ztq);
 
-    return ret;
-}
-
-int zhpeq_tq_backend_open(struct zhpeq_tq *ztq, void *sa)
-{
-    int                 ret = -EINVAL;
-    struct zhpeq_tqi    *tqi = container_of(ztq, struct zhpeq_tqi, ztq);
-
-    if (!ztq)
-        goto done;
-
-    ret = zhpe_tq_open(tqi, sa);
-
- done:
-    return ret;
-}
-
-int zhpeq_tq_backend_close(struct zhpeq_tq *ztq, int open_idx)
-{
-    int                 ret = -EINVAL;
-    struct zhpeq_tqi    *tqi = container_of(ztq, struct zhpeq_tqi, ztq);
-
-    if (!ztq)
-        goto done;
-
-    ret = zhpe_tq_close(tqi, open_idx);
-
- done:
     return ret;
 }
 
@@ -1093,6 +1098,7 @@ int zhpeq_qkdata_free(struct zhpeq_key_data *qkdata)
     if (desc->hdr.magic != ZHPE_MAGIC ||
         (desc->hdr.version & ZHPEQ_MR_VMASK) != ZHPEQ_MR_V1)
         goto done;
+
 #if QKDATA_DUMP
     zhpeq_print_qkdata(__func__, __LINE__, qkdata);
 #endif
@@ -1136,7 +1142,7 @@ int zhpeq_zmmu_reg(struct zhpeq_key_data *qkdata)
     return ret;
 }
 
-int zhpeq_fam_qkdata(struct zhpeq_dom *zqdom, int open_idx,
+int zhpeq_fam_qkdata(struct zhpeq_dom *zqdom, void *addr_cookie,
                      struct zhpeq_key_data **qkdata_out, size_t *n_qkdata_out)
 {
     int                 ret = -EINVAL;
@@ -1144,12 +1150,11 @@ int zhpeq_fam_qkdata(struct zhpeq_dom *zqdom, int open_idx,
 
     zhpe_stats_start(zhpe_stats_subid(ZHPQ, 20));
 
-    if (!qkdata_out || !n_qkdata_out || !*n_qkdata_out)
-        goto done;
-    if (!zqdom)
+    if (!zqdom || !addr_cookie || !qkdata_out ||
+        !n_qkdata_out || !*n_qkdata_out)
         goto done;
 
-    ret = zhpe_fam_qkdata(zqdomi, open_idx, qkdata_out, n_qkdata_out);
+    ret = zhpe_fam_qkdata(zqdomi, addr_cookie, qkdata_out, n_qkdata_out);
 
 #if QKDATA_DUMP
     if (ret >= 0) {
@@ -1195,7 +1200,7 @@ int zhpeq_qkdata_export(const struct zhpeq_key_data *qkdata,
     return ret;
 }
 
-int zhpeq_qkdata_import(struct zhpeq_dom *zqdom, int open_idx,
+int zhpeq_qkdata_import(struct zhpeq_dom *zqdom, void *addr_cookie,
                         const void *blob, size_t blob_len,
                         struct zhpeq_key_data **qkdata_out)
 {
@@ -1211,20 +1216,17 @@ int zhpeq_qkdata_import(struct zhpeq_dom *zqdom, int open_idx,
     if (!zqdom || !blob || blob_len != sizeof(*pdata))
         goto done;
 
-    desc = calloc_cachealigned(1, sizeof(*desc));
-    if (!desc) {
-        ret = -ENOMEM;
-        goto done;
-    }
+    desc = xmalloc_cachealigned(sizeof(*desc));
     qkdata = &desc->qkdata;
 
     desc->hdr.magic = ZHPE_MAGIC;
     desc->hdr.version = ZHPEQ_MR_V1REMOTE;
-    desc->open_idx = open_idx;
+    desc->addr_cookie = addr_cookie;
     unpack_kdata(pdata, qkdata);
+    qkdata->zqdom = &zqdomi->zqdom;
+    qkdata->cache_entry = NULL;
     desc->rsp_zaddr = qkdata->z.zaddr;
     qkdata->z.zaddr = 0;
-    qkdata->zqdom = &zqdomi->zqdom;
     *qkdata_out = qkdata;
     ret = 0;
 
@@ -1240,8 +1242,9 @@ int zhpeq_mmap(const struct zhpeq_key_data *qkdata,
     const struct zhpeq_mr_desc_v1 *desc =
         container_of(qkdata, const struct zhpeq_mr_desc_v1, qkdata);
 
-    if (zmdesc)
-        *zmdesc = NULL;
+    if (!zmdesc)
+        goto done;
+    *zmdesc = NULL;
     if (!qkdata || !zmdesc || (cache_mode & ~ZHPEQ_MR_REQ_CPU_CACHE) ||
         desc->hdr.magic != ZHPE_MAGIC ||
         (desc->hdr.version & ~ZHPEQ_MR_VREG) != ZHPEQ_MR_V1REMOTE ||
@@ -1286,11 +1289,7 @@ int zhpeq_mmap_commit(struct zhpeq_mmap_desc *zmdesc,
                       const void *addr, size_t length, bool fence,
                       bool invalidate, bool wait)
 {
-    int                 ret;
-
-    ret = zhpe_mmap_commit(zmdesc, addr, length, fence, invalidate, wait);
-
-    return ret;
+    return zhpe_mmap_commit(zmdesc, addr, length, fence, invalidate, wait);
 }
 
 void zhpeq_print_tq_info(struct zhpeq_tq *ztq)

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 Hewlett Packard Enterprise Development LP.
+ * Copyright (C) 2017-2020 Hewlett Packard Enterprise Development LP.
  * All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -102,7 +102,7 @@ struct args {
 
 struct stuff {
     const struct args   *args;
-    struct zhpeq_dom    *zdom;
+    struct zhpeq_dom    *zqdom;
     struct zhpeq_tq     *ztq;
     struct zhpeq_rq     *zrq;
     struct zhpeq_key_data *ztq_local_kdata;
@@ -119,8 +119,7 @@ struct stuff {
     size_t              ring_warmup;
     size_t              ring_end_off;
     size_t              tx_avail;
-    int                 open_idx;
-    bool                allocated;
+    void                *addr_cookie;
 };
 
 static uint64_t next_roff(struct stuff *conn, uint64_t cur)
@@ -142,11 +141,10 @@ static void stuff_free(struct stuff *stuff)
         zhpeq_qkdata_free(stuff->ztq_remote_kdata);
         zhpeq_qkdata_free(stuff->ztq_local_kdata);
     }
-    if (stuff->open_idx != -1)
-        zhpeq_tq_backend_close(stuff->ztq, stuff->open_idx);
+    zhpeq_domain_remove_addr(stuff->zqdom, stuff->addr_cookie);
     zhpeq_rq_free(stuff->zrq);
     zhpeq_tq_free(stuff->ztq);
-    zhpeq_domain_free(stuff->zdom);
+    zhpeq_domain_free(stuff->zqdom);
 
     free(stuff->rx_rcv);
     free(stuff->ring_timestamps);
@@ -154,9 +152,6 @@ static void stuff_free(struct stuff *stuff)
         munmap(stuff->tx_addr, stuff->ring_end_off * 2);
 
     FD_CLOSE(stuff->sock_fd);
-
-    if (stuff->allocated)
-        free(stuff);
 }
 
 static int do_mem_setup(struct stuff *conn)
@@ -187,7 +182,7 @@ static int do_mem_setup(struct stuff *conn)
     memset(conn->tx_addr, TX_NONE, req);
     conn->rx_addr = VPTR(conn->tx_addr, off);
 
-    ret = zhpeq_mr_reg(conn->zdom, conn->tx_addr, req,
+    ret = zhpeq_mr_reg(conn->zqdom, conn->tx_addr, req,
                        (ZHPEQ_MR_GET | ZHPEQ_MR_PUT |
                         ZHPEQ_MR_GET_REMOTE | ZHPEQ_MR_PUT_REMOTE),
                        &conn->ztq_local_kdata);
@@ -253,7 +248,7 @@ static int do_mem_xchg(struct stuff *conn)
 
     mem_msg.ztq_remote_rx_addr = be64toh(mem_msg.ztq_remote_rx_addr);
 
-    ret = zhpeq_qkdata_import(conn->zdom, conn->open_idx, blob, blob_len,
+    ret = zhpeq_qkdata_import(conn->zqdom, conn->addr_cookie, blob, blob_len,
                               &conn->ztq_remote_kdata);
     if (ret < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_qkdata_import", "", ret);
@@ -737,38 +732,37 @@ int do_ztq_setup(struct stuff *conn)
         conn->tx_avail = ZTQ_LEN;
 
     /* Allocate domain. */
-    ret = zhpeq_domain_alloc(&conn->zdom);
+    ret = zhpeq_domain_alloc(&conn->zqdom);
     if (ret < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_domain_alloc", "", ret);
         goto done;
     }
     /* Allocate zqueues. */
-    ret = zhpeq_tq_alloc(conn->zdom, conn->tx_avail + 1, conn->tx_avail + 1,
+    ret = zhpeq_tq_alloc(conn->zqdom, conn->tx_avail + 1, conn->tx_avail + 1,
                          0, 0, 0,  &conn->ztq);
     if (ret < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_tq_qalloc", "", ret);
         goto done;
     }
 
-    ret = zhpeq_rq_alloc(conn->zdom, 1, 0, &conn->zrq);
+    ret = zhpeq_rq_alloc(conn->zqdom, 1, 0, &conn->zrq);
     if (ret < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_rq_qalloc", "", ret);
         goto done;
     }
 
-    /* Get address index. */
+    /* Exchange addresses and insert the remote address in the domain. */
     ret = zhpeq_rq_xchg_addr(conn->zrq, conn->sock_fd, &sa, &sa_len);
     if (ret < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_tq_xchg_addr",
                        "", ret);
         goto done;
     }
-    ret = zhpeq_tq_backend_open(conn->ztq, &sa);
+    ret = zhpeq_domain_insert_addr(conn->zqdom, &sa, &conn->addr_cookie);
     if (ret < 0) {
-        print_func_err(__func__, __LINE__, "zhpeq_tq_backend_open", "", ret);
+        print_func_err(__func__, __LINE__, "zhpeq_domain_insert_addr", "", ret);
         goto done;
     }
-    conn->open_idx = ret;
     /* Now let's exchange the memory parameters to the other side. */
     ret = do_mem_setup(conn);
     if (ret < 0)
@@ -789,7 +783,6 @@ static int do_server_one(const struct args *oargs, int conn_fd)
     struct stuff        conn = {
         .args           = args,
         .sock_fd        = conn_fd,
-        .open_idx       = -1,
     };
     struct cli_wire_msg cli_msg;
 
@@ -897,7 +890,6 @@ static int do_client(const struct args *args)
     struct stuff        conn = {
         .args           = args,
         .sock_fd        = -1,
-        .open_idx       = -1,
         .ring_ops       = args->ring_ops,
     };
     struct cli_wire_msg cli_msg;
@@ -986,10 +978,7 @@ static void usage(bool help)
         " -s : treat the final argument as seconds\n"
         " -t <ttqlen> : length of tx request queue\n"
         " -u : uni-directional client-to-server traffic (no copy)\n"
-        " -w <ops> : number of warmup operations\n"
-        "Uses ASIC backend unless environment variable\n"
-        "ZHPE_BACKEND_LIBFABRIC_PROV is set.\n"
-        "ZHPE_BACKEND_LIBFABRIC_DOM can be used to set a specific domain\n",
+        " -w <ops> : number of warmup operations\n",
         appname);
 
     if (help)

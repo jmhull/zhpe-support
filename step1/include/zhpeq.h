@@ -127,9 +127,12 @@ struct zhpeq_key_data {
     struct zhpe_key_data z;
     struct zhpeq_dom    *zqdom;
     void                *cache_entry;
+#ifdef NOT_YET
+    /* ZZZ: registration thread. */
     void                (*ready)(struct zhpeq_key_data *qkdata,
                                  void *ready_data);
     void                *ready_data;
+#endif
 };
 
 /* Public portions of structures. */
@@ -230,8 +233,8 @@ static inline int zhpeq_lcl_key_access(const struct zhpeq_key_data *qkdata,
     uintptr_t           start = (uintptr_t)buf;
     const struct zhpe_key_data *kdata = &qkdata->z;
 
-    if (unlikely(qaccess & kdata->access) != qaccess || start < kdata->vaddr ||
-        start + len > kdata->vaddr + kdata->len)
+    if (unlikely((qaccess & kdata->access) != qaccess || start < kdata->vaddr ||
+                 start + len > kdata->vaddr + kdata->len))
         return -EINVAL;
 
     return 0;
@@ -245,15 +248,16 @@ int zhpeq_domain_alloc(struct zhpeq_dom **zqdom_out);
 
 int zhpeq_domain_free(struct zhpeq_dom *zqdom);
 
+int zhpeq_domain_insert_addr(struct zhpeq_dom *zqdom, void *sa,
+                             void **addr_cookie);
+
+int zhpeq_domain_remove_addr(struct zhpeq_dom *zqdom, void *addr_cookie);
+
 int zhpeq_tq_alloc(struct zhpeq_dom *zqdom, int cmd_qlen, int cmp_qlen,
                    int traffic_class, int priority, int slice_mask,
                    struct zhpeq_tq **ztq_out);
 
 int zhpeq_tq_free(struct zhpeq_tq *ztq);
-
-int zhpeq_tq_backend_open(struct zhpeq_tq *ztq, void *sa);
-
-int zhpeq_tq_backend_close(struct zhpeq_tq *ztq, int open_idx);
 
 static inline uint64_t ioread64(const volatile void *addr)
 {
@@ -578,11 +582,11 @@ int zhpeq_qkdata_free(struct zhpeq_key_data *qkdata);
 int zhpeq_qkdata_export(const struct zhpeq_key_data *qkdata,
                         void *blob, size_t *blob_len);
 
-int zhpeq_qkdata_import(struct zhpeq_dom *zqdom, int open_idx,
+int zhpeq_qkdata_import(struct zhpeq_dom *zqdom, void *addr_cookie,
                         const void *blob, size_t blob_len,
                         struct zhpeq_key_data **qkdata_out);
 
-int zhpeq_fam_qkdata(struct zhpeq_dom *zqdom, int open_idx,
+int zhpeq_fam_qkdata(struct zhpeq_dom *zqdom, void *addr_cookie,
                      struct zhpeq_key_data **qkdata_out, size_t *n_qkdata);
 
 int zhpeq_zmmu_reg(struct zhpeq_key_data *qkdata);

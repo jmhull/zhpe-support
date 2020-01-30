@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 Hewlett Packard Enterprise Development LP.
+ * Copyright (C) 2017-2020 Hewlett Packard Enterprise Development LP.
  * All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -180,7 +180,7 @@ int main(int argc, char **argv)
 {
     int                 ret = 1;
     struct zhpeq_tq     **ztq = NULL;
-    struct zhpeq_dom    *zdom = NULL;
+    struct zhpeq_dom    *zqdom = NULL;
     uint                *shuffle = NULL;
     bool                seed = false;
     size_t              qlen = 0;
@@ -265,7 +265,7 @@ int main(int argc, char **argv)
     } else
         random_array(shuffle, queues);
 
-    rc = zhpeq_domain_alloc(&zdom);
+    rc = zhpeq_domain_alloc(&zqdom);
     if (rc < 0) {
         print_func_err(__func__, __LINE__, "zhpeq_domain_alloc", "", rc);
         goto done;
@@ -282,7 +282,7 @@ int main(int argc, char **argv)
             print_err("%s,%u:random_array() broken\n", __func__, __LINE__);
         cmd_len = (qlen ?: random_range(2, zhpeq_attr.z.max_tx_qlen));
         cmp_len = (qlen ?: random_range(2, zhpeq_attr.z.max_tx_qlen));
-        rc = zhpeq_tq_alloc(zdom, cmd_len, cmp_len, i & 0xF, i & 0x1, 0,
+        rc = zhpeq_tq_alloc(zqdom, cmd_len, cmp_len, i & 0xF, i & 0x1, 0,
                             &ztq[i]);
         if (rc < 0) {
             print_func_errn(__func__, __LINE__, "zhpeq_tq_alloc", qlen, false,
@@ -346,7 +346,7 @@ int main(int argc, char **argv)
     ret = 0;
 
  done:
-    zhpeq_domain_free(zdom);
+    zhpeq_domain_free(zqdom);
     free(ztq);
     free(shuffle);
 
