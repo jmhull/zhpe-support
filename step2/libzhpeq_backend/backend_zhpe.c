@@ -61,6 +61,7 @@ enum zhpe_platform {
 };
 
 static int              zhpe_platform;
+static bool             domain_open;
 
 struct dev_uuid_tree_entry {
     uuid_t              uuid;
@@ -260,12 +261,27 @@ static int __do_uuid_free(uuid_t uuid)
 
 static int zhpe_domain_free(struct zhpeq_domi *zqdomi)
 {
-    return 0;
+    int                 ret = -EBUSY;;
+    bool                old = true;
+
+    mutex_lock(&dev_mutex);
+    if (!dev_uuid_tree && !dev_mr_tree && !big_rsp_zaddr &&
+        atm_cmpxchg(&domain_open, &old, false))
+        ret = 0;
+    mutex_unlock(&dev_mutex);
+
+    return ret;
 }
 
 static int zhpe_domain(struct zhpeq_domi *zqdomi)
 {
-    return 0;
+    bool                old = false;
+
+    /* Only one domain allowed. */
+    if (atm_cmpxchg(&domain_open, &old, true))
+        return 0;
+    else
+        return -EEXIST;
 }
 
 static int zhpe_tq_free_pre(struct zhpeq_tqi *tqi)

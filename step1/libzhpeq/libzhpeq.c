@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 Hewlett Packard Enterprise Development LP.
+ * Copyright (C) 2017-2020 Hewlett Packard Enterprise Development LP.
  * All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -317,7 +317,7 @@ int zhpeq_domain_alloc(struct zhpeq_dom **zqdom_out)
     if (ret >= 0)
         *zqdom_out = &zqdomi->zqdom;
     else
-        (void)zhpeq_domain_free(&zqdomi->zqdom);
+        free(zqdomi);
 
     return ret;
 }
