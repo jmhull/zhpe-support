@@ -104,7 +104,7 @@ static int __do_mr_free(uint64_t vaddr, size_t len, uint32_t access,
 /* For the moment, we will do all driver I/O synchronously.*/
 
 static int __driver_cmd(union zhpe_op *op, size_t req_len, size_t rsp_len,
-                        bool err_print)
+                        int error_ok)
 {
     int                 ret = 0;
     int                 opcode = op->hdr.opcode;
@@ -141,10 +141,12 @@ static int __driver_cmd(union zhpe_op *op, size_t req_len, size_t rsp_len,
         goto done;
     ret = op->hdr.status;
     if (ret < 0) {
-        if (err_print)
+        if (ret != error_ok) {
             zhpeu_print_err("%s,%u:zhpe command 0x%02x returned error %d:%s\n",
                             __func__, __LINE__, op->hdr.opcode, -ret,
                             strerror(-ret));
+            goto done;
+        }
     }
     ret = 0;
 
@@ -153,12 +155,12 @@ static int __driver_cmd(union zhpe_op *op, size_t req_len, size_t rsp_len,
 }
 
 static int driver_cmd(union zhpe_op *op, size_t req_len, size_t rsp_len,
-                      bool err_print)
+                      bool error_ok)
 {
     int                 ret;
 
     mutex_lock(&dev_mutex);
-    ret = __driver_cmd(op, req_len, rsp_len, err_print);
+    ret = __driver_cmd(op, req_len, rsp_len, error_ok);
     mutex_unlock(&dev_mutex);
 
     return ret;
@@ -180,7 +182,7 @@ static int zhpe_lib_init(struct zhpeq_attr *attr)
     }
 
     req->hdr.opcode = ZHPE_OP_INIT;
-    ret = driver_cmd(&op, sizeof(req->init), sizeof(rsp->init), true);
+    ret = driver_cmd(&op, sizeof(req->init), sizeof(rsp->init), 0);
     if (ret < 0)
         goto done;
 
@@ -256,7 +258,7 @@ static int __do_uuid_free(uuid_t uuid)
     memcpy(req->uuid_free.uuid, uuid, sizeof(req->uuid_free.uuid));
 
     return __driver_cmd(&op, sizeof(req->uuid_free), sizeof(rsp->uuid_free),
-                        true);
+                        -ENOENT);
 }
 
 static int zhpe_domain_free(struct zhpeq_domi *zqdomi)
@@ -299,7 +301,7 @@ static int zhpe_tq_free(struct zhpeq_tqi *tqi)
     req->hdr.opcode = ZHPE_OP_XQFREE;
     req->xqfree.info = tqi->ztq.tqinfo;
 
-    return driver_cmd(&op, sizeof(req->xqfree), sizeof(rsp->xqfree), true);
+    return driver_cmd(&op, sizeof(req->xqfree), sizeof(rsp->xqfree), 0);
 }
 
 static int zhpe_tq_alloc(struct zhpeq_tqi *tqi, int wqlen, int cqlen,
@@ -316,7 +318,7 @@ static int zhpe_tq_alloc(struct zhpeq_tqi *tqi, int wqlen, int cqlen,
     req->xqalloc.traffic_class = traffic_class;
     req->xqalloc.priority = priority;
     req->xqalloc.slice_mask = slice_mask;
-    ret = driver_cmd(&op, sizeof(req->xqalloc), sizeof(rsp->xqalloc), true);
+    ret = driver_cmd(&op, sizeof(req->xqalloc), sizeof(rsp->xqalloc), 0);
     if (ret < 0)
         goto done;
     tqi->dev_fd = dev_fd;
@@ -379,7 +381,7 @@ static int zhpe_domain_insert_addr(struct zhpeq_domi *domi, void *sa,
         req->uuid_import.uu_flags = 0;
     }
     ret = __driver_cmd(&op, sizeof(req->uuid_import),
-                      sizeof(rsp->uuid_import), true);
+                       sizeof(rsp->uuid_import), 0);
     if (unlikely(ret < 0)) {
         (void)tdelete(&sz->sz_uuid, &dev_uuid_tree, compare_uuid);
         free(uue);
@@ -408,7 +410,7 @@ static int zhpe_domain_remove_addr(struct zhpeq_domi *domi, void *addr_cookie)
     if (old == 1) {
         if (uue->big_req_zaddr) {
             rc = __do_rmr_free(uue->uuid, uue->big_rsp_zaddr, BIG_ZMMU_LEN,
-                                BIG_ZMMU_REQ_FLAGS, uue->big_req_zaddr);
+                               BIG_ZMMU_REQ_FLAGS, uue->big_req_zaddr);
             ret = zhpeu_update_error(ret, rc);
         }
         (void)tdelete(uue->uuid, &dev_uuid_tree, compare_uuid);
@@ -449,7 +451,7 @@ static int zhpe_rq_free(struct zhpeq_rqi *rqi)
     req->hdr.opcode = ZHPE_OP_RQFREE;
     req->rqfree.info = rqi->zrq.rqinfo;
 
-    return driver_cmd(&op, sizeof(req->rqfree), sizeof(rsp->rqfree), true);
+    return driver_cmd(&op, sizeof(req->rqfree), sizeof(rsp->rqfree), 0);
 }
 
 static int zhpe_rq_alloc(struct zhpeq_rqi *rqi, int rqlen, int slice_mask)
@@ -462,7 +464,7 @@ static int zhpe_rq_alloc(struct zhpeq_rqi *rqi, int rqlen, int slice_mask)
     req->hdr.opcode = ZHPE_OP_RQALLOC;
     req->rqalloc.cmplq_ent = rqlen;
     req->rqalloc.slice_mask = slice_mask;
-    ret = driver_cmd(&op, sizeof(req->rqalloc), sizeof(rsp->rqalloc), true);
+    ret = driver_cmd(&op, sizeof(req->rqalloc), sizeof(rsp->rqalloc), 0);
     if (ret < 0)
         goto done;
     rqi->dev_fd = dev_fd;
@@ -822,7 +824,7 @@ static int __do_mr_reg(uint64_t vaddr, size_t len, uint32_t access,
     req->mr_reg.len = len;
     req->mr_reg.access = access;
 
-    ret = __driver_cmd(&op, sizeof(req->mr_reg), sizeof(rsp->mr_reg), true);
+    ret = __driver_cmd(&op, sizeof(req->mr_reg), sizeof(rsp->mr_reg), 0);
     if (ret >= 0)
         *zaddr = rsp->mr_reg.rsp_zaddr;
 
@@ -842,7 +844,7 @@ static int __do_mr_free(uint64_t vaddr, size_t len, uint32_t access,
     req->mr_reg.access = access;
     req->mr_free.rsp_zaddr = zaddr;
 
-    return __driver_cmd(&op, sizeof(req->mr_free), sizeof(rsp->mr_free), true);
+    return __driver_cmd(&op, sizeof(req->mr_free), sizeof(rsp->mr_free), 0);
 }
 
 static int zhpe_mr_reg(struct zhpeq_domi *zqdomi,
@@ -995,8 +997,8 @@ static int __do_rmr_import(uuid_t uuid, uint64_t rsp_zaddr, size_t len,
     req->rmr_import.rsp_zaddr = rsp_zaddr;
     req->rmr_import.len = len;
     req->rmr_import.access = access;
-    ret = __driver_cmd(&op, sizeof(req->rmr_import), sizeof(rsp->rmr_import),
-                       true);
+    ret = __driver_cmd(&op, sizeof(req->rmr_import),
+                       sizeof(rsp->rmr_import), 0);
     if (ret >= 0) {
         *req_zaddr = rsp->rmr_import.req_addr;
         if (pgoff)
@@ -1034,7 +1036,7 @@ static int __do_rmr_free(uuid_t uuid, uint64_t rsp_zaddr, size_t len,
     req->rmr_free.rsp_zaddr = rsp_zaddr;
 
     return __driver_cmd(&op, sizeof(req->rmr_free), sizeof(rsp->rmr_free),
-                        true);
+                        -ENOENT);
 }
 
 static int do_rmr_free(uuid_t uuid, uint64_t rsp_zaddr, size_t len,
