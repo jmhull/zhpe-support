@@ -364,18 +364,19 @@ static int zhpe_domain_insert_addr(struct zhpeq_domi *domi, void *sa,
 
     uue = xcalloc(1, sizeof(*uue));
     memcpy(uue->uuid, sz->sz_uuid, sizeof(uue->uuid));
-    uue->big_req_zaddr = 0;
-    uue->big_rsp_zaddr = 0;
     uue->ref = 1;
-    uue->fam = ((sz->sz_queue & ZHPE_SZQ_FLAGS_MASK) == ZHPE_SZQ_FLAGS_FAM);
+    uue->fam = ((ntohl(sz->sz_queue) & ZHPE_SZQ_FLAGS_MASK) ==
+                ZHPE_SZQ_FLAGS_FAM);
 
-    memset(&req, 0, sizeof(req));
     req->hdr.opcode = ZHPE_OP_UUID_IMPORT;
     memcpy(req->uuid_import.uuid, sz->sz_uuid, sizeof(req->uuid_import.uuid));
     if (uue->fam) {
         memcpy(req->uuid_import.mgr_uuid, sz[1].sz_uuid,
                sizeof(req->uuid_import.mgr_uuid));
         req->uuid_import.uu_flags = UUID_IS_FAM;
+    } else {
+        memset(req->uuid_import.mgr_uuid, 0, sizeof(req->uuid_import.mgr_uuid));
+        req->uuid_import.uu_flags = 0;
     }
     ret = __driver_cmd(&op, sizeof(req->uuid_import),
                       sizeof(rsp->uuid_import), true);
