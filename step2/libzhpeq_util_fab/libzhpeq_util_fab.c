@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 Hewlett Packard Enterprise Development LP.
+ * Copyright (C) 2017-2020 Hewlett Packard Enterprise Development LP.
  * All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -289,7 +289,8 @@ int fab_dom_setup(const char *service, const char *node, bool passive,
     if (ret < 0)
         goto done;
 
-    dom->finfo.hints->caps = (FI_RMA | FI_READ | FI_WRITE |
+    dom->finfo.hints->caps = (FI_MSG | FI_TAGGED | FI_RMA | FI_ATOMIC |
+                              FI_READ | FI_WRITE |
                               FI_REMOTE_READ | FI_REMOTE_WRITE);
     dom->finfo.hints->mode = (FI_LOCAL_MR | FI_RX_CQ_DATA |
                               FI_CONTEXT | FI_CONTEXT2);
