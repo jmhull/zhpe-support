@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 Hewlett Packard Enterprise Development LP.
+ * Copyright (C) 2017-2020 Hewlett Packard Enterprise Development LP.
  * All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -307,6 +307,7 @@ static ssize_t do_progress(struct fab_conn *fab_conn,
     } else if (ret >= 0)
         ret = rc;
 
+#if 0
     rc = fab_completions(fab_conn->rx_cq, 0, NULL, NULL);
     if (rc >= 0) {
         if (rx_cmp)
@@ -315,6 +316,7 @@ static ssize_t do_progress(struct fab_conn *fab_conn,
             assert(!rc);
     } else if (ret >= 0)
         ret = rc;
+#endif
 
     return ret;
 }
