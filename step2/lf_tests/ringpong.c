@@ -372,17 +372,20 @@ static int do_server_pong(struct stuff *conn)
          tx_count != rx_count || tx_flag_in != TX_LAST; ) {
         /* Receive packets up to window or first miss. */
         for (window = RX_WINDOW; window > 0 && tx_flag_in != TX_LAST;
-             window--, rx_count++, next_roff(conn, &rx_off)) {
+             window--, rx_count++) {
             tx_addr = (void *)((char *)conn->tx_addr + rx_off.off);
             rx_addr = (void *)((char *)conn->rx_addr + rx_off.off);
-            if (!(tx_flag_new = *rx_addr))
+            tx_flag_new = *rx_addr;
+            if (!(tx_flag_new ^ rx_off.valid_flag))
                 break;
+            *tx_addr = tx_flag_new;
+            tx_flag_new &= TX_MASK;
             if (tx_flag_new != tx_flag_in) {
-                if ((tx_flag_in & TX_MASK) == TX_WARMUP)
+                if (tx_flag_in  == TX_WARMUP)
                     warmup_count = rx_count;
                 tx_flag_in = tx_flag_new;
             }
-            *tx_addr = tx_flag_new;
+            next_roff(conn, &rx_off);
             /* If we're copying, grab an entry off the list; copy the
              * ring entry into the data buf; and add it back to the end
              * of the list.
@@ -482,12 +485,15 @@ static int do_client_pong(struct stuff *conn)
          tx_count != rx_count || tx_flag_out != TX_LAST;) {
         /* Receive packets up to chunk or first miss. */
         for (window = RX_WINDOW; window > 0 && tx_flag_in != TX_LAST;
-             (window--, rx_count++, ring_avail++, next_roff(conn, &rx_off))) {
+             (window--, rx_count++, ring_avail++)) {
             rx_addr = (void *)((char *)conn->rx_addr + rx_off.off);
-            if (!(tx_flag_in = *rx_addr))
+            tx_flag_in = *rx_addr;
+            if (!(tx_flag_in ^ rx_off.valid_flag))
                 break;
+            tx_flag_in &= TX_MASK;
             if (!rx_off.off)
                 rx_idx = 0;
+            next_roff(conn, &rx_off);
             /* Reset statistics after warmup. */
             if (rx_count == warmup_count) {
                 lat_total2 = 0;
