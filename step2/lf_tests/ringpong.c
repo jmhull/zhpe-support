@@ -402,6 +402,7 @@ static int do_server_pong(struct stuff *conn)
 
         ret = do_progress(fab_conn, fab_conn->tx_cq, &tx_avail);
         if (ret < 0)
+            goto done;
 
         /* Send all available buffers. */
         for (window = TX_WINDOW;
