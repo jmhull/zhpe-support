@@ -124,7 +124,6 @@ struct stuff {
 
 static uint64_t next_roff(struct stuff *conn, uint64_t cur)
 {
-    /* Reserve first entry for source on client. */
     cur += conn->ring_entry_aligned;
     if (cur >= conn->ring_end_off)
         cur = 0;
