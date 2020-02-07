@@ -78,6 +78,7 @@ struct rx_queue {
 
 enum {
     TX_NONE     = 0x00,
+    TX_VALID    = 0x01,
     TX_WARMUP   = 0x02,
     TX_RUNNING  = 0x04,
     TX_LAST     = 0x08,
@@ -141,7 +142,7 @@ static inline void next_roff(struct stuff *conn, struct roff *roff)
     roff->off += conn->ring_entry_aligned;
     if (roff->off >= conn->ring_end_off) {
         roff->off = 0;
-        roff->valid_flag ^= 1;
+        roff->valid_flag ^= TX_VALID;
     }
 }
 
@@ -376,7 +377,7 @@ static int do_server_pong(struct stuff *conn)
             tx_addr = (void *)((char *)conn->tx_addr + rx_off.off);
             rx_addr = (void *)((char *)conn->rx_addr + rx_off.off);
             tx_flag_new = *rx_addr;
-            if (!(tx_flag_new ^ rx_off.valid_flag))
+            if ((tx_flag_new ^ rx_off.valid_flag) & TX_VALID)
                 break;
             *tx_addr = tx_flag_new;
             tx_flag_new &= TX_MASK;
@@ -488,7 +489,7 @@ static int do_client_pong(struct stuff *conn)
              (window--, rx_count++, ring_avail++)) {
             rx_addr = (void *)((char *)conn->rx_addr + rx_off.off);
             tx_flag_in = *rx_addr;
-            if (!(tx_flag_in ^ rx_off.valid_flag))
+            if ((tx_flag_in ^ rx_off.valid_flag) & TX_VALID)
                 break;
             tx_flag_in &= TX_MASK;
             if (!rx_off.off)
