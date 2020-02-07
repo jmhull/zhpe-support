@@ -377,8 +377,11 @@ static int do_server_pong(struct stuff *conn)
             tx_addr = (void *)((char *)conn->tx_addr + rx_off.off);
             rx_addr = (void *)((char *)conn->rx_addr + rx_off.off);
             tx_flag_new = *rx_addr;
-            if ((tx_flag_new ^ rx_off.valid_flag) & TX_VALID)
+            if ((tx_flag_new ^ rx_off.valid_flag) & TX_VALID) {
+                /* If optimism fails you.. */
+                io_rmb();
                 break;
+            }
             *tx_addr = tx_flag_new;
             tx_flag_new &= TX_MASK;
             if (tx_flag_new != tx_flag_in) {
@@ -490,8 +493,11 @@ static int do_client_pong(struct stuff *conn)
              (window--, rx_count++, ring_avail++)) {
             rx_addr = (void *)((char *)conn->rx_addr + rx_off.off);
             tx_flag_in = *rx_addr;
-            if ((tx_flag_in ^ rx_off.valid_flag) & TX_VALID)
+            if ((tx_flag_in ^ rx_off.valid_flag) & TX_VALID) {
+                /* If optimism fails you.. */
+                io_rmb();
                 break;
+            }
             tx_flag_in &= TX_MASK;
             if (!rx_off.off)
                 rx_idx = 0;
