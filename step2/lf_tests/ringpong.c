@@ -325,14 +325,13 @@ static void cq_update(void *vargs, void *vcqe, bool err)
     }
 }
 
-static ssize_t do_progress(struct fab_conn *fab_conn, struct fid_cq *cq,
-                           size_t *cmp)
+static ssize_t do_progress(struct fid_cq *cq, size_t *cmp)
 {
     ssize_t             ret = 0;
     struct progress     prog = { 0, 0 };
     ssize_t             rc;
 
-    rc = fab_completions(fab_conn->tx_cq, 0, cq_update, &prog);
+    rc = fab_completions(cq, 0, cq_update, &prog);
     ret = zhpeu_update_error(ret, rc);
     ret = zhpeu_update_error(ret, prog.status);
     *cmp += prog.completions;
@@ -403,7 +402,7 @@ static int do_server_pong(struct stuff *conn)
             }
         }
 
-        ret = do_progress(fab_conn, fab_conn->tx_cq, &tx_avail);
+        ret = do_progress(fab_conn->tx_cq, &tx_avail);
         if (ret < 0)
             goto done;
 
@@ -428,7 +427,7 @@ static int do_server_pong(struct stuff *conn)
     }
 
     while (tx_avail != conn->tx_avail) {
-        ret = do_progress(fab_conn, fab_conn->tx_cq, &tx_avail);
+        ret = do_progress(fab_conn->tx_cq, &tx_avail);
         if (ret < 0)
             goto done;
     }
@@ -439,7 +438,7 @@ static int do_server_pong(struct stuff *conn)
         goto done;
     }
     for (rx_avail = 0 ; !rx_avail;) {
-        ret = do_progress(fab_conn, fab_conn->rx_cq, &rx_avail);
+        ret = do_progress(fab_conn->rx_cq, &rx_avail);
         if (ret < 0)
             goto done;
     }
@@ -518,7 +517,7 @@ static int do_client_pong(struct stuff *conn)
         }
 
         now = get_cycles(NULL);
-        ret = do_progress(fab_conn, fab_conn->tx_cq, &tx_avail);
+        ret = do_progress(fab_conn->tx_cq, &tx_avail);
         lat_comp += get_cycles(NULL) - now;
         if (ret < 0)
             goto done;
@@ -592,7 +591,7 @@ static int do_client_pong(struct stuff *conn)
 
     while (tx_avail != conn->tx_avail) {
         now = get_cycles(NULL);
-        ret = do_progress(fab_conn, fab_conn->tx_cq, &tx_avail);
+        ret = do_progress(fab_conn->tx_cq, &tx_avail);
         lat_comp += get_cycles(NULL) - now;
         if (ret < 0)
             goto done;
@@ -605,8 +604,8 @@ static int do_client_pong(struct stuff *conn)
         print_func_fi_err(__func__, __LINE__, "fi_send", "", ret);
         goto done;
     }
-    while (tx_avail != conn->tx_avail) {
-        ret = do_progress(fab_conn, fab_conn->tx_cq, &tx_avail);
+    for (tx_avail = 0; !tx_avail;) {
+        ret = do_progress(fab_conn->tx_cq, &tx_avail);
         if (ret < 0)
             goto done;
     }
@@ -639,7 +638,7 @@ static int do_server_sink(struct stuff *conn)
         goto done;
     }
     for (rx_avail = 0; !rx_avail;) {
-        ret = do_progress(fab_conn, fab_conn->rx_cq, &rx_avail);
+        ret = do_progress(fab_conn->rx_cq, &rx_avail);
         if (ret < 0)
             goto done;
     }
@@ -678,7 +677,7 @@ static int do_client_unidir(struct stuff *conn)
 
         do {
             now = get_cycles(NULL);
-            ret = do_progress(fab_conn, fab_conn->tx_cq, &tx_avail);
+            ret = do_progress(fab_conn->tx_cq, &tx_avail);
             lat_comp += get_cycles(NULL) - now;
             if (ret < 0)
                 goto done;
@@ -733,7 +732,7 @@ static int do_client_unidir(struct stuff *conn)
 
     while (tx_avail != conn->tx_avail) {
         now = get_cycles(NULL);
-        ret = do_progress(fab_conn, fab_conn->tx_cq, &tx_avail);
+        ret = do_progress(fab_conn->tx_cq, &tx_avail);
         lat_comp += get_cycles(NULL) - now;
         if (ret < 0)
             goto done;
@@ -747,7 +746,7 @@ static int do_client_unidir(struct stuff *conn)
         goto done;
     }
     for (tx_avail = 0; !tx_avail;) {
-        ret = do_progress(fab_conn, fab_conn->tx_cq, &tx_avail);
+        ret = do_progress(fab_conn->tx_cq, &tx_avail);
         if (ret < 0)
             goto done;
     }
