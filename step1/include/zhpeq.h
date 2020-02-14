@@ -77,8 +77,10 @@ enum {
 
 enum zhpeq_atomic_size {
     ZHPEQ_ATOMIC_SIZE_NONE      = ZHPE_HW_ATOMIC_RETURN,
-    ZHPEQ_ATOMIC_SIZE32         = ZHPE_HW_ATOMIC_SIZE_32,
-    ZHPEQ_ATOMIC_SIZE64         = ZHPE_HW_ATOMIC_SIZE_64,
+    ZHPEQ_ATOMIC_SIZE32         = (ZHPE_HW_ATOMIC_SIZE_32 |
+                                   ZHPE_HW_ATOMIC_RETURN),
+    ZHPEQ_ATOMIC_SIZE64         = (ZHPE_HW_ATOMIC_SIZE_64 |
+                                   ZHPE_HW_ATOMIC_RETURN),
 };
 
 #define __IMPORT(_x)            ZHPEQ_ATOMIC_##_x = ZHPE_HW_OPCODE_ATM_##_x
@@ -388,10 +390,17 @@ zhpeq_tq_enqa(union zhpe_hw_wq_entry *wqe, uint16_t op_flags,
     return &wqe->enqa.payload;
 }
 
-void zhpeq_tq_atomic(union zhpe_hw_wq_entry *wqe,
-                     uint16_t op_flags, enum zhpeq_atomic_size datasize,
-                     enum zhpeq_atomic_op op, uint64_t rem_addr,
-                     const uint64_t *operands);
+static inline struct zhpe_hw_wq_atomic *
+zhpeq_tq_atomic(union zhpe_hw_wq_entry *wqe,
+                uint16_t op_flags, enum zhpeq_atomic_size datasize,
+                enum zhpeq_atomic_op op, uint64_t rem_addr)
+{
+    wqe->hdr.opcode = op | op_flags;
+    wqe->atm.rem_addr = rem_addr;
+    wqe->atm.size = datasize;
+
+    return &wqe->atm;
+}
 
 int zhpeq_tq_restart(struct zhpeq_tq *ztq);
 

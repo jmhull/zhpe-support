@@ -613,61 +613,6 @@ void zhpeq_tq_commit(struct zhpeq_tq *ztq)
     }
 }
 
-static void set_atomic_operands(union zhpe_hw_wq_entry *wqe,
-                                enum zhpeq_atomic_size datasize,
-                                int n_ops, const uint64_t *operands)
-{
-    switch (datasize) {
-
-    case ZHPEQ_ATOMIC_SIZE32:
-        wqe->atm.size = ZHPE_HW_ATOMIC_SIZE_32 | ZHPE_HW_ATOMIC_RETURN;
-        if (n_ops == 1)
-            wqe->atm.operands32[0] = operands[0];
-        else {
-            wqe->atm.operands32[0] = operands[1];
-            wqe->atm.operands32[1] = operands[0];
-        }
-        break;
-
-    case ZHPEQ_ATOMIC_SIZE64:
-        wqe->atm.size |= ZHPE_HW_ATOMIC_SIZE_64 | ZHPE_HW_ATOMIC_RETURN;
-        if (n_ops == 1)
-            wqe->atm.operands64[0] = operands[0];
-        else {
-            wqe->atm.operands64[0] = operands[1];
-            wqe->atm.operands64[1] = operands[0];
-        }
-        break;
-
-    default:
-        abort();
-    }
-}
-
-void zhpeq_tq_atomic(union zhpe_hw_wq_entry *wqe,
-                     uint16_t op_flags, enum zhpeq_atomic_size datasize,
-                     enum zhpeq_atomic_op op, uint64_t rem_addr,
-                     const uint64_t *operands)
-{
-    wqe->hdr.opcode = op | op_flags;
-    wqe->atm.rem_addr = rem_addr;
-
-    switch (op) {
-
-    case ZHPEQ_ATOMIC_ADD:
-    case ZHPEQ_ATOMIC_SWAP:
-        set_atomic_operands(wqe, datasize, 1, operands);
-        break;
-
-    case ZHPEQ_ATOMIC_CAS:
-        set_atomic_operands(wqe, datasize, 2, operands);
-        break;
-
-    default:
-        abort();
-    }
-}
-
 int zhpeq_rq_free(struct zhpeq_rq *zrq)
 {
     int                 ret = 0;

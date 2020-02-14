@@ -758,7 +758,10 @@ static bool zhpe_rq_epoll_enable(struct zhpeq_rqi *rqi, uint64_t *last,
     uint32_t            qnum = rqi_qnum(rqi);
 
     /* Try to enable the queue in epoll. */
-    (void)atm_cmpxchg(&bepoll->rqi[qnum], &rqi_old, rqi);
+    if (unlikely(!atm_cmpxchg(&bepoll->rqi[qnum], &rqi_old, rqi))) {
+        assert_always(rqi_old == rqi);
+        return true;
+    }
 
     /* Update head so interrupts can occur. */
     __zhpeq_rq_last_update(&rqi->zrq, last, now);
