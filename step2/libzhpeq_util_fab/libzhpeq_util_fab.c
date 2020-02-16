@@ -295,8 +295,8 @@ int fab_dom_setup(const char *service, const char *node, bool passive,
     dom->finfo.hints->mode = (FI_LOCAL_MR | FI_RX_CQ_DATA |
                               FI_CONTEXT | FI_CONTEXT2);
     /* dom->finfo->hints->domain_attr->data_progress = FI_PROGRESS_MANUAL; */
-    dom->finfo.hints->domain_attr->mr_mode = FI_MR_BASIC;
-    dom->finfo.hints->addr_format = FI_SOCKADDR;
+    /* dom->finfo.hints->domain_attr->mr_mode = FI_MR_BASIC; */
+    dom->finfo.hints->addr_format = FI_ADDR_ZHPE;
 
     ret = finfo_getinfo(&dom->finfo);
     if (ret < 0)
