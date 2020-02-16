@@ -242,7 +242,7 @@ static inline void io_mb(void)
     _mm_mfence();
 }
 
-#define L1_CACHE_BYTES  (64UL)
+#define L1_CACHE_BYTES  ((size_t)64)
 
 static inline void nop(void)
 {
@@ -510,8 +510,9 @@ extern struct zhpeu_init_time *zhpeu_init_time;
 
 #define page_size       (zhpeu_init_time->pagesz)
 
-#define NSEC_PER_SEC    (1000000000UL)
-#define USEC_PER_SEC    (1000000UL)
+#define MSEC_PER_SEC    ((uint64_t)1000)
+#define USEC_PER_SEC    ((uint64_t)1000000)
+#define NSEC_PER_SEC    ((uint64_t)1000000000)
 
 static inline double cycles_to_usec(uint64_t delta, uint64_t loops)
 {
