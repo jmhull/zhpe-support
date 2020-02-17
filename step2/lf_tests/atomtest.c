@@ -267,7 +267,10 @@ static int do_mem_xchg(struct stuff *conn)
 
     if (conn->server) {
         mem_msg.remote_key = htobe64(fi_mr_key(fab_conn->mrmem.mr));
-        mem_msg.remote_addr = htobe64((uintptr_t)fab_conn->mrmem.mem);
+        if (args->mr_mode & FI_MR_VIRT_ADDR)
+            mem_msg.remote_addr = htobe64((uintptr_t)fab_conn->mrmem.mem);
+        else
+            mem_msg.remote_addr = be64toh(0);
 
         ret = sock_send_blob(conn->sock_fd, &mem_msg, sizeof(mem_msg));
         if (ret < 0)
@@ -278,10 +281,7 @@ static int do_mem_xchg(struct stuff *conn)
             goto done;
 
         conn->remote_key = be64toh(mem_msg.remote_key);
-        if (args->mr_mode & FI_MR_VIRT_ADDR)
-            conn->remote_addr = be64toh(mem_msg.remote_addr);
-        else
-            conn->remote_addr = be64toh(0);
+        conn->remote_addr = be64toh(mem_msg.remote_addr);
     }
 
  done:
