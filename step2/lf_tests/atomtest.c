@@ -424,13 +424,18 @@ static int cli_atomic(struct stuff *conn,
         goto done;
     }
 
-    ret = fi_compare_atomic(fab_conn->ep, &ctx->operand, 1, NULL,
-                            &ctx->compare, NULL, original, NULL, conn->dest_av,
-                            conn->remote_addr + off, conn->remote_key,
-                            type, op, ctx);
+    if (op >= FI_CSWAP)
+        ret = fi_compare_atomic(fab_conn->ep, &ctx->operand, 1, NULL,
+                                &ctx->compare, NULL, original, NULL,
+                                conn->dest_av, conn->remote_addr + off,
+                                conn->remote_key, type, op, ctx);
+    else
+        ret = fi_fetch_atomic(fab_conn->ep, &ctx->operand, 1, NULL,
+                              original, NULL, conn->dest_av,
+                              conn->remote_addr + off, conn->remote_key,
+                              type, op, ctx);
     if (ret < 0) {
-        print_func_errn(__func__, __LINE__, "fi_compare_atomic", op,
-                        false, ret);
+        print_func_errn(__func__, __LINE__, "fi_xxx_atomic", op, false, ret);
         if (ctx)
             ctx_free(conn, ctx);
     } else
