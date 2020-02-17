@@ -53,6 +53,8 @@
 static int              timeout = TIMEOUT;
 
 struct cli_wire_msg {
+    uint64_t            mr_mode;
+    uint32_t            progress_mode;
     bool                once_mode;
 };
 
@@ -71,6 +73,8 @@ struct args {
     const char          *service;
     uint64_t            threads;
     uint64_t            ops;
+    uint64_t            mr_mode;
+    enum fi_progress    progress_mode;
     bool                once_mode;
     bool                seconds_mode;
 };
@@ -999,9 +1003,12 @@ static int do_server_one(const struct args *oargs, int conn_fd)
     if (ret < 0)
         goto done;
 
+    args->mr_mode = be64toh(cli_msg.mr_mode);
+    args->progress_mode = ntohl(cli_msg.progress_mode);
     args->once_mode = !!cli_msg.once_mode;
 
-    ret = fab_dom_setup(NULL, NULL, true, PROVIDER, NULL, EP_TYPE, fab_dom);
+    ret = fab_dom_setupx(NULL, NULL, true, PROVIDER, NULL, EP_TYPE,
+                         args->mr_mode, args->progress_mode, fab_dom);
     if (ret < 0)
         goto done;
     ret = fab_ep_setup(fab_conn, NULL, 0, 0);
@@ -1111,11 +1118,14 @@ static void *do_client_thread(void *vconn)
             goto done;
         conn->sock_fd = ret;
 
+        cli_msg.mr_mode = htobe64(args->mr_mode);
+        cli_msg.progress_mode = htonl(args->progress_mode);
         cli_msg.once_mode = args->once_mode;
         ret = sock_send_blob(conn->sock_fd, &cli_msg, sizeof(cli_msg));
         if (ret < 0)
             goto done;
-        ret = fab_dom_setup(NULL, NULL, true, PROVIDER, NULL, EP_TYPE, fab_dom);
+        ret = fab_dom_setupx(NULL, NULL, true, PROVIDER, NULL, EP_TYPE,
+                             args->mr_mode, args->progress_mode, fab_dom);
         if (ret < 0)
             goto done;
     }
@@ -1239,9 +1249,11 @@ static void usage(bool help)
         "Lower case is base 10; upper case is base 2.\n"
         "Server requires just port; client requires all 5 arguments.\n"
         "Client only options:\n"
+        " -m : manual progress\n"
         " -o : run once and then server will exit\n"
         " -s : interpet <ops> as seconds\n"
-        " -t : number of client threads\n",
+        " -t <threads> : number of client threads\n"
+        " -z : zero-based keys\n",
         appname);
 
     if (help) {
@@ -1256,6 +1268,8 @@ int main(int argc, char **argv)
 {
     int                 ret = 1;
     struct args         args = {
+        .mr_mode        = (FI_MR_ALLOCATED | FI_MR_PROV_KEY | FI_MR_VIRT_ADDR),
+        .progress_mode  = FI_PROGRESS_AUTO,
     };
     bool                client_opt = false;
     int                 opt;
@@ -1265,7 +1279,7 @@ int main(int argc, char **argv)
     if (argc == 1)
         usage(true);
 
-    while ((opt = getopt(argc, argv, "sot:")) != -1) {
+    while ((opt = getopt(argc, argv, "msot:z")) != -1) {
 
         /* All opts are client only, now. */
         client_opt = true;
@@ -1276,6 +1290,12 @@ int main(int argc, char **argv)
             if (args.once_mode)
                 usage(false);
             args.once_mode = true;
+            break;
+
+        case 'm':
+            if (args.progress_mode != FI_PROGRESS_AUTO)
+                usage(false);
+            args.progress_mode = FI_PROGRESS_MANUAL;
             break;
 
         case 's':
@@ -1290,6 +1310,15 @@ int main(int argc, char **argv)
             if (parse_kb_uint64_t(__func__, __LINE__, "threads",
                                   optarg, &args.threads, 0, 1,
                                   SIZE_MAX, PARSE_KB | PARSE_KIB) < 0)
+                usage(false);
+            break;
+
+        case 'z':
+            if (!(args.mr_mode & FI_MR_VIRT_ADDR))
+                usage(false);
+            args.mr_mode &= ~FI_MR_VIRT_ADDR;
+            break;
+
         default:
             usage(false);
 
