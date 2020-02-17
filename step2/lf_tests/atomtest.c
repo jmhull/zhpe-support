@@ -261,6 +261,7 @@ static int do_mem_setup(struct stuff *conn)
 static int do_mem_xchg(struct stuff *conn)
 {
     int                 ret;
+    const struct args   *args = conn->args;
     struct fab_conn     *fab_conn = &conn->fab_conn;
     struct mem_wire_msg mem_msg;
 
@@ -277,7 +278,10 @@ static int do_mem_xchg(struct stuff *conn)
             goto done;
 
         conn->remote_key = be64toh(mem_msg.remote_key);
-        conn->remote_addr = be64toh(mem_msg.remote_addr);
+        if (args->mr_mode & FI_MR_VIRT_ADDR)
+            conn->remote_addr = be64toh(mem_msg.remote_addr);
+        else
+            conn->remote_addr = be64toh(0);
     }
 
  done:
