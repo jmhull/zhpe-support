@@ -428,10 +428,13 @@ static int cli_atomic(struct stuff *conn,
                             &ctx->compare, NULL, original, NULL, conn->dest_av,
                             conn->remote_addr + off, conn->remote_key,
                             type, op, ctx);
-    if (ret >= 0)
+    if (ret < 0) {
+        print_func_errn(__func__, __LINE__, "fi_compare_atomic", op,
+                        false, ret);
+        if (ctx)
+            ctx_free(conn, ctx);
+    } else
         conn->ops_done++;
-    else if (ctx)
-        ctx_free(conn, ctx);
 
  done:
     return ret;
