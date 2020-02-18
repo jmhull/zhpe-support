@@ -39,12 +39,12 @@
 
 _EXTERN_C_BEG
 
-#define ZHPEU_FAB_ATOMIC_OP_SIZE(_size, _op, _operand1, _operand2,      \
+#define ZHPEU_FAB_ATOMIC_OP_SIZE(_size, _op, _operand0, _operand1,      \
                                  _dst, _original, _status)              \
 do {                                                                    \
     uint ## _size ## _t *__dst = (_dst);                                \
+    uint ## _size ## _t __operand0 = (_operand0);                       \
     uint ## _size ## _t __operand1 = (_operand1);                       \
-    uint ## _size ## _t __operand2 = (_operand2);                       \
     uint ## _size ## _t __old;                                          \
     uint ## _size ## _t __new;                                          \
                                                                         \
@@ -57,34 +57,34 @@ do {                                                                    \
         break;                                                          \
                                                                         \
     case FI_ATOMIC_WRITE:                                               \
-        (_original) = atm_xchg(__dst, __operand1);                      \
+        (_original) = atm_xchg(__dst, __operand0);                      \
         break;                                                          \
                                                                         \
     case FI_BAND:                                                       \
-        (_original) = atm_and(__dst, __operand1);                       \
+        (_original) = atm_and(__dst, __operand0);                       \
         break;                                                          \
                                                                         \
     case FI_BOR:                                                        \
-        (_original) = atm_or(__dst, __operand1);                        \
+        (_original) = atm_or(__dst, __operand0);                        \
         break;                                                          \
                                                                         \
     case FI_BXOR:                                                       \
-        (_original) = atm_xor(__dst, __operand1);                       \
+        (_original) = atm_xor(__dst, __operand0);                       \
         break;                                                          \
                                                                         \
     case FI_CSWAP:                                                      \
-        atm_cmpxchg(__dst, &__operand1, __operand2);                    \
-        (_original) = __operand1;                                       \
+        atm_cmpxchg(__dst, &__operand0, __operand1);                    \
+        (_original) = __operand0;                                       \
         break;                                                          \
                                                                         \
     case FI_SUM:                                                        \
-        (_original) = atm_add(__dst, __operand1);                       \
+        (_original) = atm_add(__dst, __operand0);                       \
         break;                                                          \
                                                                         \
     case FI_MSWAP:                                                      \
         __old = atm_load_rlx(__dst);                                    \
         for (;;) {                                                      \
-            __new = (__operand2 & __operand1) | (__old & ~__operand1);  \
+            __new = (__operand1 & __operand0) | (__old & ~__operand0);  \
             if (atm_cmpxchg(__dst, &__old, __new))                      \
                 break;                                                  \
         }                                                               \

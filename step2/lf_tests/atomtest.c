@@ -88,8 +88,8 @@ union atomic_value {
 
 struct context {
     struct fi_context2  ctx;
-    union atomic_value operand;
-    union atomic_value compare;
+    union atomic_value operand0;
+    union atomic_value operand1;
 };
 
 union ucontext {
@@ -132,17 +132,17 @@ struct atomic_op {
     enum fi_op          op;
     enum fi_datatype    type;
     uint64_t            off;
-    uint64_t            compare;
-    uint64_t            operand;
+    uint64_t            operand0;
+    uint64_t            operand1;
 };
 
 /* Assuming little endian for now. */
 
 static struct atomic_op cli_sum_ops[] = {
-    { FI_SUM, FI_UINT64, 0x00, 0, 1 },
-    { FI_SUM, FI_UINT32, 0x08, 0, 1 },
-    { FI_SUM, FI_UINT64, 0x10, 0, 0x100000000UL },
-    { FI_SUM, FI_UINT32, 0x18, 0, 1 },
+    { FI_SUM, FI_UINT64, 0x00, 1, 0 },
+    { FI_SUM, FI_UINT32, 0x08, 1, 0 },
+    { FI_SUM, FI_UINT64, 0x10, 0x100000000UL, 0 },
+    { FI_SUM, FI_UINT32, 0x18, 1, 0 },
     { FI_ATOMIC_OP_LAST },
 };
 
@@ -151,10 +151,10 @@ static struct atomic_op cli_sum_ops[] = {
 uint64_t                cli_sum_ops_size = CLI_SUM_OPS_SIZE;
 
 static struct atomic_op svr_sum_ops[] = {
-    { FI_SUM, FI_UINT64, 0x00, 0, 1 },
-    { FI_SUM, FI_UINT32, 0x08, 0, 1 },
-    { FI_SUM, FI_UINT32, 0x10, 0, 1 },
-    { FI_SUM, FI_UINT64, 0x18, 0, 0x100000000UL },
+    { FI_SUM, FI_UINT64, 0x00, 1, 0 },
+    { FI_SUM, FI_UINT32, 0x08, 1, 0 },
+    { FI_SUM, FI_UINT32, 0x10, 1, 0 },
+    { FI_SUM, FI_UINT64, 0x18, 0x100000000UL, 0 },
     { FI_ATOMIC_OP_LAST },
 };
 
@@ -388,7 +388,7 @@ static const char *op_str(enum fi_op op)
 
 static int cli_atomic(struct stuff *conn,
                       enum fi_op op, enum fi_datatype type, uint64_t off,
-                      uint64_t operand, uint64_t compare, void *original)
+                      uint64_t operand0, uint64_t operand1, void *original)
 {
     int                 ret = -FI_EAGAIN;
     struct fab_conn     *fab_conn = &conn->fab_conn;
@@ -399,7 +399,7 @@ static int cli_atomic(struct stuff *conn,
         goto done;
 
     /*
-     * The API requires us to guarantee the compare and operand are
+     * The API requires us to guarantee that both operands are
      * stable for the duration of the call and that they be pointers to the
      * proper types.
      */
@@ -407,23 +407,23 @@ static int cli_atomic(struct stuff *conn,
     switch (type) {
 
     case FI_UINT8:
-        ctx->operand.u8 = operand;
-        ctx->compare.u8 = compare;
+        ctx->operand0.u8 = operand0;
+        ctx->operand1.u8 = operand1;
         break;
 
     case FI_UINT16:
-        ctx->operand.u16 = operand;
-        ctx->compare.u16 = compare;
+        ctx->operand0.u16 = operand0;
+        ctx->operand1.u16 = operand1;
         break;
 
     case FI_UINT32:
-        ctx->operand.u32 = operand;
-        ctx->compare.u32 = compare;
+        ctx->operand0.u32 = operand0;
+        ctx->operand1.u32 = operand1;
         break;
 
     case FI_UINT64:
-        ctx->operand.u64 = operand;
-        ctx->compare.u64 = compare;
+        ctx->operand0.u64 = operand0;
+        ctx->operand1.u64 = operand1;
         break;
 
     default:
@@ -433,12 +433,12 @@ static int cli_atomic(struct stuff *conn,
     }
 
     if (op >= FI_CSWAP)
-        ret = fi_compare_atomic(fab_conn->ep, &ctx->operand, 1, NULL,
-                                &ctx->compare, NULL, original, NULL,
+        ret = fi_compare_atomic(fab_conn->ep, &ctx->operand1, 1, NULL,
+                                &ctx->operand0, NULL, original, NULL,
                                 conn->dest_av, conn->remote_addr + off,
                                 conn->remote_key, type, op, ctx);
     else
-        ret = fi_fetch_atomic(fab_conn->ep, &ctx->operand, 1, NULL,
+        ret = fi_fetch_atomic(fab_conn->ep, &ctx->operand0, 1, NULL,
                               original, NULL, conn->dest_av,
                               conn->remote_addr + off, conn->remote_key,
                               type, op, ctx);
@@ -455,19 +455,19 @@ static int cli_atomic(struct stuff *conn,
 
 static int cli_atomic_op(struct stuff *conn, struct atomic_op *op)
 {
-    return cli_atomic(conn, op->op, op->type, op->off, op->operand,
-                      op->compare, NULL);
+    return cli_atomic(conn, op->op, op->type, op->off, op->operand0,
+                      op->operand1, NULL);
 }
 
 static int cli_atomic_original(struct stuff *conn,
                                enum fi_op op, enum fi_datatype type,
-                               uint64_t off, uint64_t operand, uint64_t compare,
-                               uint64_t *original)
+                               uint64_t off, uint64_t operand0,
+                               uint64_t operand1, uint64_t *original)
 {
     int                 ret;
     union atomic_value  orig;
 
-    ret = cli_atomic(conn, op, type, off, operand, compare, &orig);
+    ret = cli_atomic(conn, op, type, off, operand0, operand1, &orig);
     if (ret < 0)
         goto done;
     ret = do_wait_all(conn);
@@ -483,11 +483,11 @@ static int cli_atomic_original(struct stuff *conn,
 /* NOTE: The result handling is different for the local case. */
 static void lcl_atomic(struct stuff *conn,
                        enum fi_op op, enum fi_datatype type, void *dst,
-                       uint64_t operand, uint64_t compare, uint64_t *original)
+                       uint64_t operand0, uint64_t operand1, uint64_t *original)
 {
     int                 rc MAYBE_UNUSED;
 
-    rc = zhpeu_fab_atomic_op(type, op, operand, compare, dst, original);
+    rc = zhpeu_fab_atomic_op(type, op, operand0, operand1, dst, original);
     assert(!rc);
 }
 
@@ -496,7 +496,7 @@ static void lcl_atomic_op(struct stuff *conn, struct atomic_op *op)
     struct fab_conn     *fab_conn = &conn->fab_conn;
     void                *dst = ((char *)fab_conn->mrmem.mem + op->off);
 
-    return lcl_atomic(conn, op->op, op->type, dst, op->operand, op->compare,
+    return lcl_atomic(conn, op->op, op->type, dst, op->operand0, op->operand1,
                       NULL);
 }
 
@@ -566,7 +566,7 @@ struct atomic_sz {
 };
 
 static int cli_atomic_size_test1(struct stuff *conn, enum fi_op op,
-                                 uint64_t operand, uint64_t compare,
+                                 uint64_t operand0, uint64_t operand1,
                                  uint64_t start, uint64_t *end,
                                  struct atomic_sz *sz)
 {
@@ -584,22 +584,22 @@ static int cli_atomic_size_test1(struct stuff *conn, enum fi_op op,
     case FI_ATOMIC_READ:
     case FI_ATOMIC_WRITE:
         /* Nothing to do. */
-        assert(operand == 0);
-        assert(compare == 0);
+        assert(operand0 == 0);
+        assert(operand1 == 0);
         break;
 
     case FI_BAND:
     case FI_BOR:
         /* Nothing to do. */
-        assert(operand != 0);
-        assert(compare == 0);
+        assert(operand0 != 0);
+        assert(operand1 == 0);
         break;
 
     case FI_BXOR:
-        assert(operand != 0);
-        assert(compare == 0);
+        assert(operand0 != 0);
+        assert(operand1 == 0);
         /* Zero out previous bits in operand. */
-        operand &= ~sz->prev_mask;
+        operand0 &= ~sz->prev_mask;
         break;
 
     case FI_CSWAP:
@@ -607,17 +607,17 @@ static int cli_atomic_size_test1(struct stuff *conn, enum fi_op op,
          * Compare actually needs to be start and we want to make sure any
          * unused bits are wrong.
          */
-        assert(operand != 0);
-        assert(compare == 0);
-        compare = (start ^ ~sz->type_mask) | (start & sz->type_mask);
+        assert(operand0 == 0);
+        assert(operand1 != 0);
+        operand0 = (start ^ ~sz->type_mask) | (start & sz->type_mask);
         break;
 
     case FI_MSWAP:
         /* Nothing to do. */
-        assert(operand != 0);
-        assert(compare != 0);
+        assert(operand0 != 0);
+        assert(operand1 != 0);
         /* Make sure unused bits of compare will be wrong. */
-        compare = (compare ^ ~sz->type_mask) | (compare & sz->type_mask);
+        operand0 = (operand0 ^ ~sz->type_mask) | (operand0 & sz->type_mask);
         break;
 
     default:
@@ -625,10 +625,10 @@ static int cli_atomic_size_test1(struct stuff *conn, enum fi_op op,
         goto done;
     }
 
-    /* Mask the compare, so that the upper bytes will be invalid. */
     lcl_result = start;
-    lcl_atomic(conn, op, sz->type, &lcl_result, operand, compare, &lcl_fetched);
-    ret = cli_atomic_original(conn, op, sz->type, SW_OFF, operand, compare,
+    lcl_atomic(conn, op, sz->type, &lcl_result, operand0, operand1,
+               &lcl_fetched);
+    ret = cli_atomic_original(conn, op, sz->type, SW_OFF, operand0, operand1,
                               &rem_fetched);
     if (ret < 0)
         goto done;
@@ -675,7 +675,7 @@ static int cli_atomic_size_test1(struct stuff *conn, enum fi_op op,
 }
 
 static int cli_atomic_size_test(struct stuff *conn, enum fi_op op,
-                                uint64_t operand, uint64_t compare,
+                                uint64_t operand0, uint64_t operand1,
                                 uint64_t start, uint64_t end)
 {
     int                 ret;
@@ -701,7 +701,7 @@ static int cli_atomic_size_test(struct stuff *conn, enum fi_op op,
 
     for (i = 0; i < ARRAY_SIZE(sz); i++) {
         val64 = end;
-        ret = cli_atomic_size_test1(conn, op, operand, compare, start, &val64,
+        ret = cli_atomic_size_test1(conn, op, operand0, operand1, start, &val64,
                                     &sz[i]);
         if (ret < 0)
             goto done;
@@ -709,7 +709,7 @@ static int cli_atomic_size_test(struct stuff *conn, enum fi_op op,
     }
 
     ret = cli_atomic_original(conn, FI_ATOMIC_READ, FI_UINT64, SW_OFF,
-                            0, 0, &val64);
+                              0, 0, &val64);
     if (ret < 0)
         goto done;
     if (end != val64) {
