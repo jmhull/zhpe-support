@@ -604,7 +604,7 @@ static int cli_atomic_size_test1(struct stuff *conn, enum fi_op op,
 
     case FI_CSWAP:
         /* Account for previous op in compare. */
-        operand0 = (operand0 & ~sz->prev_mask) | (operand0 & sz->prev_mask);
+        operand0 = (operand0 & ~sz->prev_mask) | (start & sz->prev_mask);
         /* But make sure unused bits for the current size are wrong. */
         operand0 ^= ~sz->type_mask;
         break;
