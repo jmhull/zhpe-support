@@ -582,42 +582,35 @@ static int cli_atomic_size_test1(struct stuff *conn, enum fi_op op,
     switch (op) {
 
     case FI_ATOMIC_READ:
-    case FI_ATOMIC_WRITE:
         /* Nothing to do. */
         assert(operand0 == 0);
         assert(operand1 == 0);
         break;
 
+    case FI_ATOMIC_WRITE:
+        assert(operand1 == 0);
+        break;
+
     case FI_BAND:
     case FI_BOR:
-        /* Nothing to do. */
-        assert(operand0 != 0);
         assert(operand1 == 0);
         break;
 
     case FI_BXOR:
-        assert(operand0 != 0);
         assert(operand1 == 0);
         /* Zero out previous bits in operand. */
         operand0 &= ~sz->prev_mask;
         break;
 
     case FI_CSWAP:
-        /*
-         * Compare actually needs to be start and we want to make sure any
-         * unused bits are wrong.
-         */
-        assert(operand0 == 0);
-        assert(operand1 != 0);
-        operand0 = (start ^ ~sz->type_mask) | (start & sz->type_mask);
+        assert(operand0 == start);
+        /* Make sure any unused bits are wrong. */
+        operand0 = (operand0 ^ ~sz->type_mask) | (operand0 & sz->type_mask);
         break;
 
     case FI_MSWAP:
-        /* Nothing to do. */
-        assert(operand0 != 0);
-        assert(operand1 != 0);
-        /* Make sure unused bits of compare will be wrong. */
-        operand0 = (operand0 ^ ~sz->type_mask) | (operand0 & sz->type_mask);
+        /* Make sure any unused bits are wrong. */
+        operand0 = (start ^ ~sz->type_mask) | (operand0 & sz->type_mask);
         break;
 
     default:
@@ -755,22 +748,22 @@ static int cli_atomic_size_tests(struct stuff *conn)
     /* MSWAP: 6 cli_op, 4 hw_op */
     expected_ops(conn, 6, 4);
     ret = cli_atomic_size_test(conn, FI_MSWAP,
-                               0xFEDCBA9876543210UL, 0xFFFFFFFFFFFFFFFFUL,
+                               0xFFFFFFFFFFFFFFFFUL, 0xFEDCBA9876543210UL,
                                0x2DE187B5A5E187B5UL, 0xFEDCBA9876543210UL);
     if (ret < 0)
         goto done;
     /* MSWAP: 6 cli_op, 2 hw_op */
     expected_ops(conn, 6, 2);
     ret = cli_atomic_size_test(conn, FI_MSWAP,
-                               0xFFFFFFFFFFFFFFFFUL, 0x0123456789ABCDEFUL,
+                               0x0123456789ABCDEFUL, 0xFFFFFFFFFFFFFFFFUL,
                                0xFEDCBA9876543210UL, 0xFFFFFFFFFFFFFFFFUL);
     if (ret < 0)
         goto done;
     /* CSWAP: 6 cli_op, 4 hw_op */
     expected_ops(conn, 6, 4);
     ret = cli_atomic_size_test(conn, FI_CSWAP,
-                               0xFEDCBA9876543210UL, 0x0000000000000000,
-                               0xFFFFFFFFFFFFFFFFUL, 0xFEDCBA9876543210);
+                               0xFFFFFFFFFFFFFFFFUL, 0xFEDCBA9876543210UL,
+                               0xFFFFFFFFFFFFFFFFUL, 0xFEDCBA9876543210UL);
     if (ret < 0)
         goto done;
     /* ATOMIC_READ: 6 cli_op, 4 hw_op */
@@ -783,8 +776,8 @@ static int cli_atomic_size_tests(struct stuff *conn)
     /* ATOMIC_WRITE: 6 cli_op, 4 hw_op */
     expected_ops(conn, 6, 4);
     ret = cli_atomic_size_test(conn, FI_ATOMIC_WRITE,
-                               0x0000000000000000UL, 0x0000000000000000UL,
-                               0xFEDCBA9876543210UL, 0x0000000000000000UL);
+                               0x0000000000000001UL, 0x0000000000000000UL,
+                               0xFEDCBA9876543210UL, 0x0000000000000001UL);
     if (ret < 0)
         goto done;
     /* Check op counts. */
