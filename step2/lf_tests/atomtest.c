@@ -437,11 +437,15 @@ static int cli_atomic(struct stuff *conn,
                                 &ctx->operand0, NULL, original, NULL,
                                 conn->dest_av, conn->remote_addr + off,
                                 conn->remote_key, type, op, ctx);
-    else
+    else if (original)
         ret = fi_fetch_atomic(fab_conn->ep, &ctx->operand0, 1, NULL,
                               original, NULL, conn->dest_av,
                               conn->remote_addr + off, conn->remote_key,
                               type, op, ctx);
+    else
+        ret = fi_atomic(fab_conn->ep, &ctx->operand0, 1, NULL, conn->dest_av,
+                        conn->remote_addr + off, conn->remote_key,
+                        type, op, ctx);
     if (ret < 0) {
         print_func_errn(__func__, __LINE__, "fi_xxx_atomic", op, false, ret);
         if (ctx)
