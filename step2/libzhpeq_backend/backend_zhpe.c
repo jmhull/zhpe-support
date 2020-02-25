@@ -61,7 +61,7 @@ enum zhpe_platform {
 };
 
 static int              zhpe_platform;
-static bool             domain_open;
+static int              domain_open;
 
 struct dev_uuid_tree_entry {
     uuid_t              uuid;
@@ -263,13 +263,16 @@ static int __do_uuid_free(uuid_t uuid)
 
 static int zhpe_domain_free(struct zhpeq_domi *zqdomi)
 {
-    int                 ret = -EBUSY;;
-    bool                old = true;
+    int                 ret = -EBUSY;
 
+    /* Make a fabtest pass without a bunch of pointless work. */
     mutex_lock(&dev_mutex);
-    if (!dev_uuid_tree && !dev_mr_tree && !big_rsp_zaddr &&
-        atm_cmpxchg(&domain_open, &old, false))
-        ret = 0;
+    if (domain_open > 0) {
+        domain_open--;
+        if (domain_open > 0 ||
+            (!dev_uuid_tree && !dev_mr_tree && !big_rsp_zaddr))
+            ret = 0;
+    }
     mutex_unlock(&dev_mutex);
 
     return ret;
@@ -277,13 +280,11 @@ static int zhpe_domain_free(struct zhpeq_domi *zqdomi)
 
 static int zhpe_domain(struct zhpeq_domi *zqdomi)
 {
-    bool                old = false;
+    mutex_lock(&dev_mutex);
+    domain_open++;
+    mutex_unlock(&dev_mutex);
 
-    /* Only one domain allowed. */
-    if (atm_cmpxchg(&domain_open, &old, true))
-        return 0;
-    else
-        return -EEXIST;
+    return 0;
 }
 
 static int zhpe_tq_free_pre(struct zhpeq_tqi *tqi)
@@ -465,6 +466,28 @@ static int zhpe_rq_alloc(struct zhpeq_rqi *rqi, int rqlen, int slice_mask)
     req->rqalloc.cmplq_ent = rqlen;
     req->rqalloc.slice_mask = slice_mask;
     ret = driver_cmd(&op, sizeof(req->rqalloc), sizeof(rsp->rqalloc), 0);
+    if (ret < 0)
+        goto done;
+    rqi->dev_fd = dev_fd;
+    rqi->zrq.rqinfo = rsp->rqalloc.info;
+
+ done:
+    return ret;
+}
+
+static int zhpe_rq_alloc_specific(struct zhpeq_rqi *rqi, int rqlen,
+                                  int qspecific)
+{
+    int                 ret;
+    union zhpe_op       op;
+    union zhpe_req      *req = &op.req;
+    union zhpe_rsp      *rsp = &op.rsp;
+
+    req->hdr.opcode = ZHPE_OP_RQALLOC_SPECIFIC;
+    req->rqalloc_specific.cmplq_ent = rqlen;
+    req->rqalloc_specific.qspecific = qspecific;
+    ret = driver_cmd(&op, sizeof(req->rqalloc_specific),
+                     sizeof(rsp->rqalloc), 0);
     if (ret < 0)
         goto done;
     rqi->dev_fd = dev_fd;

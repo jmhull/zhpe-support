@@ -655,10 +655,10 @@ int zhpeq_rq_free(struct zhpeq_rq *zrq)
     return ret;
 }
 
-int zhpeq_rq_alloc(struct zhpeq_dom *zqdom, int rx_qlen, int slice_mask,
-                   struct zhpeq_rq **zrq_out)
+static int rq_alloc(struct zhpeq_dom *zqdom, int rx_qlen, int slice_mask,
+                    int qspecific, struct zhpeq_rq **zrq_out)
 {
-    int                 ret = -EINVAL;
+    int                 ret;
     struct zhpeq_rqi    *rqi = NULL;
     struct zhpeq_rq     *zrq = NULL;
     union rdm_rcv_tail  tail = {
@@ -666,14 +666,6 @@ int zhpeq_rq_alloc(struct zhpeq_dom *zqdom, int rx_qlen, int slice_mask,
     };
     int                 flags;
     size_t              orig;
-
-    if (!zrq_out)
-        goto done;
-    *zrq_out = NULL;
-    if (!zqdom || rx_qlen < 1 || rx_qlen > b_attr.z.max_rx_qlen ||
-        (slice_mask & ~(ALL_SLICES | SLICE_DEMAND)))
-        goto done;
-
     ret = -ENOMEM;
     rqi = calloc_cachealigned(1, sizeof(*rqi));
     if (!rqi)
@@ -688,7 +680,10 @@ int zhpeq_rq_alloc(struct zhpeq_dom *zqdom, int rx_qlen, int slice_mask,
     if (rx_qlen == orig)
         rx_qlen *= 2;
 
-    ret = zhpe_rq_alloc(rqi, rx_qlen, slice_mask);
+    if (qspecific == 0)
+        ret = zhpe_rq_alloc(rqi, rx_qlen, slice_mask);
+    else
+        ret = zhpe_rq_alloc_specific(rqi, rx_qlen, qspecific);
     if (ret < 0)
         goto done;
 
@@ -725,6 +720,43 @@ int zhpeq_rq_alloc(struct zhpeq_dom *zqdom, int rx_qlen, int slice_mask,
     else
         (void)zhpeq_rq_free(zrq);
 
+    return ret;
+}
+
+int zhpeq_rq_alloc(struct zhpeq_dom *zqdom, int rx_qlen, int slice_mask,
+                   struct zhpeq_rq **zrq_out)
+{
+    int                 ret = -EINVAL;
+
+    if (!zrq_out)
+        goto done;
+    *zrq_out = NULL;
+    if (!zqdom || rx_qlen < 1 || rx_qlen > b_attr.z.max_rx_qlen ||
+        (slice_mask & ~(ALL_SLICES | SLICE_DEMAND)))
+        goto done;
+
+    ret = rq_alloc(zqdom, rx_qlen, slice_mask, 0, zrq_out);
+
+ done:
+    return ret;
+}
+
+int zhpeq_rq_alloc_specific(struct zhpeq_dom *zqdom, int rx_qlen,
+                            int qspecific, struct zhpeq_rq **zrq_out)
+{
+    int                 ret = -EINVAL;
+
+    if (!zrq_out)
+        goto done;
+    *zrq_out = NULL;
+    if (!zqdom || rx_qlen < 1 || rx_qlen > b_attr.z.max_rx_qlen ||
+        qspecific < 0 || (qspecific & ZHPE_SZQ_FLAGS_MASK))
+        goto done;
+
+    /* qspecific == 0 => any */
+    ret = rq_alloc(zqdom, rx_qlen, 0, qspecific, zrq_out);
+
+ done:
     return ret;
 }
 
@@ -1384,13 +1416,19 @@ int zhpeq_get_zaddr(const char *node, const char *service,
     return -ENOSYS;
 }
 
-int zhpeq_get_src_zaddr(struct sockaddr_zhpe *sz)
+int zhpeq_get_src_zaddr(struct sockaddr_zhpe *sz, uint32_t queue,
+                        bool gcid_only)
 {
-    if (!sz)
+    if (!sz || (queue & ZHPE_SZQ_FLAGS_MASK))
         return -EINVAL;
 
     memset(sz, 0, sizeof(*sz));
-    memcpy(sz->sz_uuid, zhpeq_uuid, sizeof(sz->sz_uuid));
+    sz->sz_family = AF_ZHPE;
+    if (gcid_only)
+        zhpeu_install_gcid_in_uuid(sz->sz_uuid, zhpeu_uuid_to_gcid(zhpeq_uuid));
+    else
+        memcpy(sz->sz_uuid, zhpeq_uuid, sizeof(sz->sz_uuid));
+    sz->sz_queue = htonl(queue);
 
     return 0;
 }

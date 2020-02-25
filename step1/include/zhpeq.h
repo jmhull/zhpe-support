@@ -454,6 +454,9 @@ int zhpeq_rq_free(struct zhpeq_rq *zrq);
 int zhpeq_rq_alloc(struct zhpeq_dom *zqdom, int rx_qlen, int slice_mask,
                    struct zhpeq_rq **zrq_out);
 
+int zhpeq_rq_alloc_specific(struct zhpeq_dom *zqdom, int rx_qlen,
+                            int qspecific, struct zhpeq_rq **zrq_out);
+
 /*
  * Separated for use in the manual-progress case to keep polling from
  * happening.
@@ -618,7 +621,8 @@ static inline bool zhpeq_is_asic(void)
 int zhpeq_get_zaddr(const char *node, const char *service,
                     struct sockaddr_zhpe *sz);
 
-int zhpeq_get_src_zaddr(struct sockaddr_zhpe *sz);
+int zhpeq_get_src_zaddr(struct sockaddr_zhpe *sz, uint32_t queue,
+                        bool gcid_only);
 
 /* Info/debugging */
 
