@@ -147,7 +147,7 @@ static int __driver_cmd(union zhpe_op *op, size_t req_len, size_t rsp_len,
             zhpeu_print_err("%s,%u:zhpe command 0x%02x returned error %d:%s\n",
                             __func__, __LINE__, op->hdr.opcode, -ret,
                             strerror(-ret));
-            while (jlb_debug);
+            while (!jlb_debug);
             goto done;
         }
     }
