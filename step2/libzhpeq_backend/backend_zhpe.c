@@ -101,8 +101,6 @@ static int __do_rmr_free(uuid_t uuid, uint64_t rsp_zaddr, size_t len,
 static int __do_mr_free(uint64_t vaddr, size_t len, uint32_t access,
                         uint64_t zaddr);
 
-volatile int jlb_debug;
-
 /* For the moment, we will do all driver I/O synchronously.*/
 
 static int __driver_cmd(union zhpe_op *op, size_t req_len, size_t rsp_len,
@@ -147,7 +145,6 @@ static int __driver_cmd(union zhpe_op *op, size_t req_len, size_t rsp_len,
             zhpeu_print_err("%s,%u:zhpe command 0x%02x returned error %d:%s\n",
                             __func__, __LINE__, op->hdr.opcode, -ret,
                             strerror(-ret));
-            while (!jlb_debug);
             goto done;
         }
     }
