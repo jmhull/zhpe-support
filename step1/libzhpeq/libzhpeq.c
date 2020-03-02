@@ -83,6 +83,7 @@ static void cmd_insert64(struct zhpeq_tq *ztq, uint16_t reservation16)
     union zhpe_hw_wq_entry *dst = &ztq->cmd[reservation16];
     size_t              i;
 
+    src->hdr.cmp_index = reservation16;
     assert(!(src->hdr.opcode & ZHPE_HW_OPCODE_FENCE));
     for (i = 1; i < ARRAY_SIZE(dst->bytes8); i++)
         iowrite64(src->bytes8[i], &dst->bytes8[i]);
@@ -94,6 +95,7 @@ static void mem_insert64(struct zhpeq_tq *ztq, uint16_t reservation16)
     union zhpe_hw_wq_entry *src = &ztq->mem[reservation16];
     union zhpe_hw_wq_entry *dst = tq_get_wq(ztq);
 
+    src->hdr.cmp_index = reservation16;
     memcpy(dst, src, sizeof(*dst));
 }
 
@@ -102,6 +104,7 @@ static void cmd_insert128(struct zhpeq_tq *ztq, uint16_t reservation16)
     union zhpe_hw_wq_entry *src = &ztq->mem[reservation16];
     union zhpe_hw_wq_entry *dst = &ztq->cmd[reservation16];
 
+    src->hdr.cmp_index = reservation16;
     assert(!(src->hdr.opcode & ZHPE_HW_OPCODE_FENCE));
     asm volatile (
         "vmovdqa   (%[s]), %%xmm0\n"
@@ -121,6 +124,7 @@ static void cmd_insert256(struct zhpeq_tq *ztq, uint16_t reservation16)
     union zhpe_hw_wq_entry *src = &ztq->mem[reservation16];
     union zhpe_hw_wq_entry *dst = &ztq->cmd[reservation16];
 
+    src->hdr.cmp_index = reservation16;
     assert(!(src->hdr.opcode & ZHPE_HW_OPCODE_FENCE));
     asm volatile (
         "vmovdqa   (%[s]), %%ymm0\n"
@@ -135,6 +139,7 @@ static void mem_insert256(struct zhpeq_tq *ztq, uint16_t reservation16)
     union zhpe_hw_wq_entry *src = &ztq->mem[reservation16];
     union zhpe_hw_wq_entry *dst = tq_get_wq(ztq);
 
+    src->hdr.cmp_index = reservation16;
     asm volatile (
         "vmovdqa   (%[s]), %%ymm0\n"
         "vmovdqa 32(%[s]), %%ymm1\n"
@@ -504,8 +509,6 @@ int zhpeq_tq_alloc(struct zhpeq_dom *zqdom, int cmd_qlen, int cmp_qlen,
     ztq->mem = calloc_cachealigned(e, sizeof(*ztq->mem));
     if (!ztq->mem)
         goto done;
-    for (i = 0; i < e; i++)
-        ztq->mem[i].hdr.cmp_index = i;
     e = (e >> ZHPEQ_BITMAP_SHIFT) + 1;
     ztq->free_bitmap = calloc_cachealigned(e, sizeof(*ztq->free_bitmap));
     if (!ztq->free_bitmap)
