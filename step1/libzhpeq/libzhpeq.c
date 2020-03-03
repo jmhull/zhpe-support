@@ -225,7 +225,7 @@ static void __attribute__((constructor)) lib_init(void)
     }
 }
 
-void zhpeq_register_backend(enum zhpe_backend backend, struct backend_ops *ops)
+void zhpeq_register_backend(enum zhpeq_backend backend, struct backend_ops *ops)
 {
     /* For the moment, the zhpe backend will only register if the zhpe device
      * can be opened and the libfabric backend will only register if the zhpe

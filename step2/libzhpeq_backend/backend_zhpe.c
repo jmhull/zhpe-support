@@ -1366,7 +1366,7 @@ void zhpeq_backend_zhpe_init(int fd)
     if (fd == -1)
         return;
 
-    zhpeq_register_backend(ZHPE_BACKEND_ZHPE, &ops);
+    zhpeq_register_backend(ZHPEQ_BACKEND_ZHPE, &ops);
 }
 
 #endif

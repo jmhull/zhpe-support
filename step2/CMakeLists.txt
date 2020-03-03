@@ -10,6 +10,7 @@ include("../libfabric.cmake")
 
 include_directories(BEFORE ../include asic/include)
 
+add_subdirectory(lf_tests)
+add_subdirectory(libzhpe_mmap)
 #add_subdirectory(libzhpeq_backend)
 add_subdirectory(libzhpeq_util_fab)
-add_subdirectory(lf_tests)
