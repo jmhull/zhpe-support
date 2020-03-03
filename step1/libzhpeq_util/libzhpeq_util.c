@@ -55,24 +55,23 @@ static const char *cpuinfo_delim = " \t\n";
 struct zhpeu_init_time  *zhpeu_init_time;
 static struct zhpeu_init_time  init_time;
 
-static struct zhpeu_atm_lifo_head atm_dummy;
+static __int128                 atm_dummy;
 
 static void __attribute__((constructor)) lib_init(void)
 {
+    __int128            old;
+    __int128            new;
     long                rcl;
-    struct zhpeu_atm_lifo_head oldh;
-    struct zhpeu_atm_lifo_head newh;
     struct zhpeu_init_time *oldi;
 
     /*
      * Run only once and force __atomic_load_16 and
      * __atomic_compare_exchange_16 to be linked.
      */
-    oldh = atm_load_rlx(&atm_dummy);
-    newh.ptr = NULL;
-    newh.seq = oldh.seq + 1;
-    atm_cmpxchg(&atm_dummy, &oldh, newh);
-    if (oldh.seq) {
+    old = atm_load_rlx(&atm_dummy);
+    new = old + 1;
+    atm_cmpxchg(&atm_dummy, &old, new);
+    if (old) {
         /* Wait for global initialization to complete. */
         while (!atm_load_rlx(&zhpeu_init_time))
             yield();
@@ -359,9 +358,13 @@ static void do_init_time_cpuinfo(struct zhpeu_init_time *init_time)
     }
 
     /* CPU support for TSC timekeeping? */
-    if (!(i & 0x03))
+    if ((i & 0x03) != 0x03) {
         /* No. */
+        if (zhpeu_is_sim())
+            /* Carbon: use rdtsc, assume the frequency is 1GHz. */
+            init_time->get_cycles = get_tsc_cycles;
         goto done;
+    }
 
     /*
      * Once we know nonstop_tsc exists, we could measure the frequency,
@@ -438,20 +441,6 @@ done:
                             __func__, __LINE__, fname);
         fclose(fp);
     }
-}
-
-static uint64_t get_tsc_cycles(volatile uint32_t *cpup)
-{
-    uint32_t            lo;
-    uint32_t            hi;
-    uint32_t            cpu;
-
-    asm volatile("rdtscp" : "=a" (lo), "=d" (hi), "=c" (cpu) : :);
-
-    if (cpup)
-        *cpup = cpu;
-
-    return ((uint64_t)hi << 32 | lo);
 }
 
 static uint64_t get_clock_cycles(volatile uint32_t *cpup)
@@ -548,7 +537,6 @@ int zhpeu_parse_kb_uint64_t(const char *name, const char *sp, uint64_t *val,
     ret = 0;
 
  done:
-
     return ret;
 }
 
@@ -684,7 +672,6 @@ int zhpeu_sock_connect(const char *node, const char *service)
     }
 
 done:
-
     return ret;
 }
 
@@ -783,8 +770,8 @@ int zhpeu_sock_send_blob(int fd, const void *blob, size_t blob_len)
         goto done;
     res = write(fd, blob, req);
     ret = zhpeu_check_func_io(__func__, __LINE__, "write", "", req, res, 0);
- done:
 
+ done:
     return ret;
 }
 
@@ -811,8 +798,8 @@ int zhpeu_sock_recv_fixed_blob(int sock_fd, void *blob, size_t blob_len)
         goto done;
     res = read(sock_fd, blob, req);
     ret = zhpeu_check_func_io(__func__, __LINE__, "read", "", req, res, 0);
- done:
 
+ done:
     return ret;
 }
 
@@ -847,6 +834,7 @@ int zhpeu_sock_recv_var_blob(int sock_fd, size_t extra_len,
             goto done;
     }
     memset((char *)*blob + req, 0, extra_len);
+
  done:
     if (ret < 0) {
         free(*blob);
@@ -922,8 +910,8 @@ static int sockaddr_cmpx(const union sockaddr_in46 *sa1,
     if (ret)
         goto done;
     ret = arithcmp(ntohs(local1.sin_port), ntohs(local2.sin_port));
- done:
 
+ done:
     return ret;
 }
 
@@ -1212,7 +1200,6 @@ void zhpeu_sockaddr_6to4(void *addr)
     sa->sa_family = AF_INET;
 
  done:
-
     return;
 }
 
@@ -1250,6 +1237,7 @@ const char *zhpeu_sockaddr_ntop(const void *addr, char *buf, size_t len)
         errno = EAFNOSUPPORT;
         break;
     }
+
  done:
     if (!ret && len > 0)
         buf[0] = '\0';
@@ -1332,12 +1320,43 @@ void *zhpeu_mmap(void *addr, size_t length, int prot, int flags,
     return ret;
 }
 
-void zhpeu_thr_wait_init(struct zhpeu_thr_wait *thr_wait)
+static bool thr_wait_signal_atomic_fast(struct zhpeu_thr_wait *thr_wait)
+{
+    int32_t             old = ZHPEU_THR_WAIT_IDLE;
+    int32_t             new = ZHPEU_THR_WAIT_SIGNAL;
+
+    /* One sleeper, many wakers. */
+    if (atm_cmpxchg(&thr_wait->state, &old, new) || old == new)
+        /* Done! */
+        return false;
+
+    /* Need slow path. */
+    assert(old == ZHPEU_THR_WAIT_SLEEP);
+
+    return true;
+}
+
+static void thr_wait_signal_atomic_slow(struct zhpeu_thr_wait *thr_wait,
+                                        bool lock, bool unlock);
+
+void zhpeu_thr_wait_signal_init(
+    struct zhpeu_thr_wait *thr_wait,
+    bool (*signal_fast)(struct zhpeu_thr_wait *thr_wait),
+    void (*signal_slow)(struct zhpeu_thr_wait *thr_wait,
+                        bool lock, bool unlock))
 {
     memset(thr_wait, 0, sizeof(*thr_wait));
     mutex_init(&thr_wait->mutex, NULL);
     cond_init(&thr_wait->cond, NULL);
+    thr_wait->signal_fast = signal_fast;
+    thr_wait->signal_slow = signal_slow;
     atm_store_rlx(&thr_wait->state, ZHPEU_THR_WAIT_IDLE);
+}
+
+void zhpeu_thr_wait_init(struct zhpeu_thr_wait *thr_wait)
+{
+    zhpeu_thr_wait_signal_init(thr_wait, thr_wait_signal_atomic_fast,
+                               thr_wait_signal_atomic_slow);
 }
 
 void zhpeu_thr_wait_destroy(struct zhpeu_thr_wait *thr_wait)
@@ -1346,8 +1365,8 @@ void zhpeu_thr_wait_destroy(struct zhpeu_thr_wait *thr_wait)
     cond_destroy(&thr_wait->cond);
 }
 
-void zhpeu_thr_wait_signal_slow(struct zhpeu_thr_wait *thr_wait,
-                                bool lock, bool unlock)
+static void thr_wait_signal_atomic_slow(struct zhpeu_thr_wait *thr_wait,
+                                        bool lock, bool unlock)
 {
     int32_t             old = ZHPEU_THR_WAIT_SLEEP;
     int32_t             new = ZHPEU_THR_WAIT_IDLE;
@@ -1397,6 +1416,16 @@ int zhpeu_thr_wait_sleep_slow(struct zhpeu_thr_wait *thr_wait,
         mutex_unlock(&thr_wait->mutex);
 
     return ret;
+}
+
+void zhpeu_work_head_signal_init(
+    struct zhpeu_work_head *head,
+    bool (*signal_fast)(struct zhpeu_thr_wait *thr_wait),
+    void (*signal_slow)(struct zhpeu_thr_wait *thr_wait,
+                        bool lock, bool unlock))
+{
+    zhpeu_thr_wait_signal_init(&head->thr_wait, signal_fast, signal_slow);
+    STAILQ_INIT(&head->work_list);
 }
 
 void zhpeu_work_head_init(struct zhpeu_work_head *head)
@@ -1472,4 +1501,63 @@ char *zhpeu_asprintf(const char *fmt, ...)
 void zhpeu_yield(void)
 {
     zhpeu_posixcall(zhpeu_fatal, pthread_yield,);
+}
+
+void zhpeu_timing_reset(struct zhpeu_timing *t)
+{
+    t->tot = 0;
+    t->min = ~(uint64_t)0;
+    t->max = 0;
+    t->cnt = 0;
+    t->skw = 0;
+}
+
+void zhpeu_timing_update(struct zhpeu_timing *t, uint64_t cycles)
+{
+    if ((int64_t)cycles < 0)
+        t->skw++;
+    t->tot += cycles;
+    t->min = min(t->min, cycles);
+    t->max = max(t->max, cycles);
+    t->cnt++;
+}
+
+void zhpeu_timing_print(struct zhpeu_timing *t, const char *lbl,
+                        uint64_t divisor)
+{
+    if (!t->cnt)
+        return;
+
+    zhpeu_print_info("%s:%s:ave/min/max/cnt/skw %.3lf/%.3lf/%.3lf/%" PRIu64
+                     "/%" PRIu64 "\n",
+                     zhpeu_appname, lbl,
+                     cycles_to_usec(t->tot, t->cnt * divisor),
+                     cycles_to_usec(t->min, divisor),
+                     cycles_to_usec(t->max, divisor),
+                     t->cnt, t->skw);
+}
+
+void zhpeu_debug_log(void *vlog, const char *str, uint line,
+                     uint64_t v0, uint64_t v1, uint64_t v2, uint64_t v3,
+                     uint64_t v4, uint64_t cycles)
+{
+    struct zhpeu_debug_log *log = vlog;
+    uint                idx = atm_inc(&log->idx);
+    struct zhpeu_debug_rec *rec = &log->ent[idx & log->mask];
+
+    rec->idx = idx;
+    rec->line = line;
+    rec->str = str;
+    rec->cycles = cycles;
+    rec->v[0] = v0;
+    rec->v[1] = v1;
+    rec->v[2] = v2;
+    rec->v[3] = v3;
+    rec->v[4] = v4;
+}
+
+void zhpeu_assert_fail(const char *expr, const char *func, uint line)
+{
+    zhpeu_print_err("assertion %s failed at %s,%u\n", expr, func, line);
+    abort();
 }

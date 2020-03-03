@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 Hewlett Packard Enterprise Development LP.
+ * Copyright (C) 2017-2020 Hewlett Packard Enterprise Development LP.
  * All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -277,9 +277,10 @@ static int finfo_getinfo(struct fab_info *finfo)
     return ret;
 }
 
-int fab_dom_setup(const char *service, const char *node, bool passive,
-                  const char *provider, const char *domain,
-                  enum fi_ep_type ep_type, struct fab_dom *dom)
+int fab_dom_setupx(const char *service, const char *node, bool passive,
+                   const char *provider, const char *domain,
+                   enum fi_ep_type ep_type, uint64_t mr_mode,
+                   enum fi_progress progress, struct fab_dom *dom)
 {
     int                 ret;
     struct fi_av_attr   av_attr = { .type = FI_AV_TABLE };
@@ -289,13 +290,13 @@ int fab_dom_setup(const char *service, const char *node, bool passive,
     if (ret < 0)
         goto done;
 
-    dom->finfo.hints->caps = (FI_RMA | FI_READ | FI_WRITE |
+    dom->finfo.hints->caps = (FI_MSG | FI_TAGGED | FI_RMA | FI_ATOMIC |
+                              FI_READ | FI_WRITE |
                               FI_REMOTE_READ | FI_REMOTE_WRITE);
-    dom->finfo.hints->mode = (FI_LOCAL_MR | FI_RX_CQ_DATA |
-                              FI_CONTEXT | FI_CONTEXT2);
-    /* dom->finfo->hints->domain_attr->data_progress = FI_PROGRESS_MANUAL; */
-    dom->finfo.hints->domain_attr->mr_mode = FI_MR_BASIC;
-    dom->finfo.hints->addr_format = FI_SOCKADDR;
+    dom->finfo.hints->mode = (FI_LOCAL_MR | FI_CONTEXT | FI_CONTEXT2);
+    dom->finfo.hints->addr_format = FI_ADDR_ZHPE;
+    dom->finfo.hints->domain_attr->mr_mode = mr_mode;
+    dom->finfo.hints->domain_attr->data_progress = progress;
 
     ret = finfo_getinfo(&dom->finfo);
     if (ret < 0)
@@ -327,6 +328,16 @@ int fab_dom_setup(const char *service, const char *node, bool passive,
  done:
     return ret;
 }
+
+
+int fab_dom_setup(const char *service, const char *node, bool passive,
+                  const char *provider, const char *domain,
+                  enum fi_ep_type ep_type, struct fab_dom *dom)
+{
+    return fab_dom_setupx(service, node, passive, provider, domain,
+                          ep_type, FI_MR_BASIC, FI_PROGRESS_AUTO, dom);
+}
+
 int fab_dom_getinfo(const char *service, const char *node, bool passive,
                     struct fab_dom *dom, struct fab_info *finfo)
 {
@@ -792,8 +803,8 @@ int fab_av_xchg_addr(struct fab_conn *conn, int sock_fd,
     ret = zhpeu_sock_recv_fixed_blob(sock_fd, ep_addr, sizeof(*ep_addr));
     if (ret < 0)
         goto done;
- done:
 
+ done:
     return ret;
 }
 
@@ -1002,7 +1013,6 @@ int fab_av_wait_send(struct fab_conn *conn, fi_addr_t fi_addr,
     ret = 0;
 
  done:
-
     return ret;
 }
 
@@ -1063,6 +1073,5 @@ int fab_av_wait_recv(struct fab_conn *conn, fi_addr_t fi_addr,
     }
 
  done:
-
     return ret;
 }

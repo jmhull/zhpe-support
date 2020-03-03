@@ -707,7 +707,6 @@ static int lfab_open(struct zhpeq *zq, void *sa)
     }
 
  done:
-
     return ret;
 }
 
@@ -756,6 +755,7 @@ static inline void cq_write(void *vcontext, int status)
     conn->cq_tail++;
     qcmwrite64(conn->cq_tail & qmask,
                zq->qcm, ZHPE_XDM_QCM_CMPL_QUEUE_TAIL_TOGGLE_OFFSET);
+
  done:
     /* Place context on free list. */
     STAILQ_INSERT_TAIL(&context->fab_plus->context_free,
@@ -986,6 +986,7 @@ static bool lfab_zq(struct stuff *conn)
             goto done;
         }
     }
+
  eagain:
     /* Get completions. */
     (void)fab_completions(fab_conn->tx_cq, 0, cq_update, zq);
@@ -1203,7 +1204,6 @@ static int lfab_mr_reg(struct zhpeq_dom *zdom,
     qkdata->z.zaddr = ((uint64_t)index << KEY_SHIFT) + TO_ADDR(qkdata->z.vaddr);
     qkdata->laddr = qkdata->z.zaddr;
     qkdata->z.access = access;
-
     *qkdata_out = qkdata;
     ret = 0;
 
@@ -1267,10 +1267,9 @@ static int lfab_zmmu_reg(struct zhpeq_key_data *qkdata)
     qkdata->z.zaddr = (((uint64_t)old.index << KEY_SHIFT) +
                        TO_ADDR(qkdata->z.vaddr));
     desc->hdr.version |= ZHPEQ_MR_VREG;
-
     ret = 0;
- done:
 
+ done:
     return ret;
 }
 

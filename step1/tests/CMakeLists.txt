@@ -12,6 +12,9 @@ target_link_libraries(libzhpeq_ld PUBLIC zhpeq zhpeq_util)
 add_executable(libzhpeq_mr libzhpeq_mr.c)
 target_link_libraries(libzhpeq_mr PUBLIC zhpeq zhpeq_util)
 
+add_executable(libzhpeq_pcitime libzhpeq_pcitime.c)
+target_link_libraries(libzhpeq_pcitime PUBLIC zhpeq zhpeq_util)
+
 add_executable(libzhpeq_qalloc libzhpeq_qalloc.c)
 target_link_libraries(libzhpeq_qalloc PUBLIC zhpeq zhpeq_util)
 
@@ -33,6 +36,7 @@ install(
   enqapong
   libzhpeq_ld
   libzhpeq_mr
+  libzhpeq_pcitime
   libzhpeq_qalloc
   libzhpeq_qattr
   libzhpeq_regtime

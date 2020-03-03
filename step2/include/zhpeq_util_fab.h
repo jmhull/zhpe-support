@@ -159,6 +159,14 @@ int fab_dom_setup(const char *service, const char *node, bool passive,
 #define _fab_dom_setup(...)                                     \
     zhpeu_call_neg(zhpeu_err, fab_dom_setup, int, __VA_ARGS__)
 
+int fab_dom_setupx(const char *service, const char *node, bool passive,
+                   const char *provider, const char *domain,
+                   enum fi_ep_type ep_type, uint64_t mr_mode,
+                   enum fi_progress progress, struct fab_dom *dom);
+
+#define _fab_dom_setupx(...)                                    \
+    zhpeu_call_neg(zhpeu_err, fab_dom_setupx, int, __VA_ARGS__)
+
 int fab_dom_getinfo(const char *service, const char *node, bool passive,
                     struct fab_dom *dom, struct fab_info *finfo);
 

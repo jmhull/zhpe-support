@@ -160,7 +160,7 @@ extern const char       *zhpeu_appname;
 /* Borrow AF_APPLETALK since it should never be seen. */
 #define AF_ZHPE                 ((sa_family_t)AF_APPLETALK)
 #define ZHPE_ADDRSTRLEN         ((size_t)37)
-#define ZHPE_WILDCARD           (0)     /* Valid, but reserved by driver. */
+#define ZHPE_SZQ_WILDCARD       (0)     /* Valid, but reserved by driver. */
 #define ZHPE_SZQ_INVAL          (~(uint32_t)0)
 
 #define ZHPE_GCID_MASK          (((uint32_t)1 << ZHPE_GCID_BITS) - 1)
@@ -242,11 +242,24 @@ static inline void io_mb(void)
     _mm_mfence();
 }
 
-#define L1_CACHE_BYTES  (64UL)
+#define L1_CACHE_BYTES  ((size_t)64)
 
 static inline void nop(void)
 {
     asm volatile("nop");
+}
+
+static inline uint64_t get_tsc_cycles(volatile uint32_t *cpup)
+{
+    uint64_t            ret;
+    uint32_t            cpu;
+
+    ret = _rdtscp(&cpu);
+
+    if (cpup)
+        *cpup = cpu;
+
+    return ret;
 }
 
 /*
@@ -298,6 +311,7 @@ static inline int ffs64(uint64_t v)
 
 #undef _BARRIED_DEFINED
 
+#define PACKED          __attribute__ ((packed));
 #define INT32_ALIGNED   __attribute__ ((aligned (__alignof__(int32_t))));
 #define INT64_ALIGNED   __attribute__ ((aligned (__alignof__(int64_t))));
 #define INT128_ALIGNED  __attribute__ ((aligned (__alignof__(__int128_t))));
@@ -483,50 +497,6 @@ char *zhpeu_sockaddr_str(const void *addr);
 #define atm_inc(_p)     atm_add(_p, 1)
 #define atm_dec(_p)     atm_sub(_p, 1)
 
-struct zhpeu_atm_lifo_head {
-    struct zhpeu_atm_list_next *ptr;
-    uintptr_t            seq;
-} INT128_ALIGNED;
-
-struct zhpeu_atm_list_next {
-    struct zhpeu_atm_list_next *next;
-} INT64_ALIGNED;
-
-static inline void zhpeu_atm_lifo_push(struct zhpeu_atm_lifo_head *head,
-                                       struct zhpeu_atm_list_next *new)
-{
-    struct zhpeu_atm_lifo_head oldh;
-    struct zhpeu_atm_lifo_head newh;
-
-    newh.ptr = new;
-    for (oldh = atm_load_rlx(head);;) {
-        new->next = oldh.ptr;
-        newh.seq = oldh.seq + 1;
-        if (atm_cmpxchg(head, &oldh, newh))
-            break;
-    }
-}
-
-static inline struct zhpeu_atm_list_next *
-zhpeu_atm_lifo_pop(struct zhpeu_atm_lifo_head *head)
-{
-    struct zhpeu_atm_list_next *ret;
-    struct zhpeu_atm_lifo_head oldh;
-    struct zhpeu_atm_lifo_head newh;
-
-    for (oldh = atm_load_rlx(head);;) {
-        ret = oldh.ptr;
-        if (!ret)
-            break;
-        newh.ptr = ret->next;
-        newh.seq = oldh.seq + 1;
-        if (atm_cmpxchg(head, &oldh, newh))
-            break;
-    }
-
-    return ret;
-}
-
 struct zhpeu_init_time {
     uint64_t            (*get_cycles)(volatile uint32_t *cpup);
     uint64_t            freq;
@@ -540,8 +510,9 @@ extern struct zhpeu_init_time *zhpeu_init_time;
 
 #define page_size       (zhpeu_init_time->pagesz)
 
-#define NSEC_PER_SEC    (1000000000UL)
-#define USEC_PER_SEC    (1000000UL)
+#define MSEC_PER_SEC    ((uint64_t)1000)
+#define USEC_PER_SEC    ((uint64_t)1000000)
+#define NSEC_PER_SEC    ((uint64_t)1000000000)
 
 static inline double cycles_to_usec(uint64_t delta, uint64_t loops)
 {
@@ -554,10 +525,27 @@ static inline uint64_t usec_to_cycles(uint64_t usec)
     return (usec * zhpeu_init_time->freq / USEC_PER_SEC);
 }
 
+/* On any hardware we care about, rdtsc will work for timing. */
+
+#ifdef __x86_64__
+
+#define get_cycles(_cpup)       get_tsc_cycles(_cpup)
+/*
+ * rdtsc interferes less with instruction pipeline and is better suited
+ * for approximate timing uses.
+ */
+#define get_cycles_approx()     _rdtsc()
+
+#else
+
 static inline uint64_t get_cycles(volatile uint32_t *cpup)
 {
     return zhpeu_init_time->get_cycles(cpup);
 }
+
+#define get_cycles_approx()     get_cycles(NULL)
+
+#endif
 
 static inline uint64_t get_tsc_freq(void)
 {
@@ -922,6 +910,9 @@ struct zhpeu_thr_wait {
     int32_t             state;
     pthread_mutex_t     mutex;
     pthread_cond_t      cond;
+    bool                (*signal_fast)(struct zhpeu_thr_wait *thr_wait);
+    void                (*signal_slow)(struct zhpeu_thr_wait *thr_wait,
+                                       bool lock, bool unlock);
 } CACHE_ALIGNED;
 
 #define MS_PER_SEC      (1000UL)
@@ -940,31 +931,17 @@ enum {
 };
 
 void zhpeu_thr_wait_init(struct zhpeu_thr_wait *thr_wait);
+void zhpeu_thr_wait_signal_init(
+    struct zhpeu_thr_wait *thr_wait,
+    bool (*signal_fast)(struct zhpeu_thr_wait *thr_wait),
+    void (*signal_slow)(struct zhpeu_thr_wait *thr_wait,
+                        bool lock, bool unlock));
 void zhpeu_thr_wait_destroy(struct zhpeu_thr_wait *thr_wait);
-
-static inline bool zhpeu_thr_wait_signal_fast(struct zhpeu_thr_wait *thr_wait)
-{
-    int32_t             old = ZHPEU_THR_WAIT_IDLE;
-    int32_t             new = ZHPEU_THR_WAIT_SIGNAL;
-
-    /* One sleeper, many wakers. */
-    if (atm_cmpxchg(&thr_wait->state, &old, new) || old == new)
-        /* Done! */
-        return false;
-
-    /* Need slow path. */
-    assert(old == ZHPEU_THR_WAIT_SLEEP);
-
-    return true;
-}
-
-void zhpeu_thr_wait_signal_slow(struct zhpeu_thr_wait *thr_wait,
-                                bool lock, bool unlock);
 
 static inline void zhpeu_thr_wait_signal(struct zhpeu_thr_wait *thr_wait)
 {
-    if (zhpeu_thr_wait_signal_fast(thr_wait))
-        zhpeu_thr_wait_signal_slow(thr_wait, true, true);
+    if (thr_wait->signal_fast(thr_wait))
+        thr_wait->signal_slow(thr_wait, true, true);
 }
 
 static inline bool zhpeu_thr_wait_sleep_fast(struct zhpeu_thr_wait *thr_wait)
@@ -1007,6 +984,11 @@ struct zhpeu_work {
 };
 
 void zhpeu_work_head_init(struct zhpeu_work_head *head);
+void zhpeu_work_head_signal_init(
+    struct zhpeu_work_head *head,
+    bool (*signal_fast)(struct zhpeu_thr_wait *thr_wait),
+    void (*signal_slow)(struct zhpeu_thr_wait *thr_wait,
+                        bool lock, bool unlock));
 void zhpeu_work_head_destroy(struct zhpeu_work_head *head);
 
 static inline void zhpeu_work_init(struct zhpeu_work *work)
@@ -1048,13 +1030,62 @@ static inline void zhpeu_work_queue(struct zhpeu_work_head *head,
     work->worker = worker;
     work->data = data;
     STAILQ_INSERT_TAIL(&head->work_list, work, lentry);
-    if (signal && zhpeu_thr_wait_signal_fast(&head->thr_wait))
-        zhpeu_thr_wait_signal_slow(&head->thr_wait, false, unlock);
+    if (signal && head->thr_wait.signal_fast(&head->thr_wait))
+        head->thr_wait.signal_slow(&head->thr_wait, false, unlock);
     else if (unlock)
         mutex_unlock(&head->thr_wait.mutex);
 }
 
 bool zhpeu_work_process(struct zhpeu_work_head *head, bool lock, bool unlock);
+
+struct zhpeu_timing {
+    uint64_t            tot;
+    uint64_t            min;
+    uint64_t            max;
+    uint64_t            cnt;
+    uint64_t            skw;
+};
+
+void zhpeu_timing_reset(struct zhpeu_timing *t);
+
+void zhpeu_timing_update(struct zhpeu_timing *t, uint64_t cycles);
+
+void zhpeu_timing_print(struct zhpeu_timing *t, const char *lbl,
+                        uint64_t divisor);
+
+struct zhpeu_debug_rec {
+    uint                idx;
+    uint                line;
+    const char          *str;
+    uint64_t            cycles;
+    uint64_t            v[5];
+};
+
+struct zhpeu_debug_log {
+    uint                idx;
+    uint                mask;
+    struct zhpeu_debug_rec ent[];
+};
+
+#define ZHPEU_DECLARE_DEBUG_LOG(_name, _order)                  \
+struct {                                                        \
+    uint                idx;                                    \
+    uint                mask;                                   \
+    struct zhpeu_debug_rec ent[1U << (_order)];                 \
+} _name = { .mask = (1U << (_order)) - 1 }
+
+void zhpeu_debug_log(void *vlog, const char *str, uint line,
+                     uint64_t v0, uint64_t v1, uint64_t v2, uint64_t v3,
+                     uint64_t v4, uint64_t cycles);
+
+void zhpeu_assert_fail(const char *expr, const char *func, uint line);
+
+/* Not affected by NDEBUG */
+#define assert_always(_expr)                                    \
+do {                                                            \
+    if (unlikely(!(_expr)))                                     \
+        zhpeu_assert_fail(#_expr, __func__, __LINE__);          \
+} while (0)
 
 #ifdef _ZHPEQ_TEST_COMPAT_
 
@@ -1082,6 +1113,24 @@ bool zhpeu_work_process(struct zhpeu_work_head *head, bool lock, bool unlock);
 #define sockaddr_dup            zhpeu_sockaddr_dup
 #define sockaddr_valid          zhpeu_sockaddr_valid
 #define zhpeq_util_init         zhpeu_util_init
+
+#endif
+
+#ifdef HAVE_ZHPE_SIM
+
+#include <hpe_sim_api_linux64.h>
+
+static inline bool zhpeu_is_sim(void)
+{
+    return !!sim_api_is_sim();
+}
+
+#else
+
+static inline bool zhpeu_is_sim(void)
+{
+    return false;
+}
 
 #endif
 
