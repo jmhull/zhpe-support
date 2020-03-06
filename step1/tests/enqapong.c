@@ -863,7 +863,7 @@ static int do_q_setup(struct stuff *conn)
         goto done;
     }
     conn->dgcid = zhpeu_uuid_to_gcid(sa.zhpe.sz_uuid);
-    conn->rspctxid = sa.zhpe.sz_queue;
+    conn->rspctxid = ntohl(sa.zhpe.sz_queue);
     ret = zhpeq_domain_insert_addr(conn->zqdom, &sa, &conn->addr_cookie);
     if (ret < 0) {
         zhpeu_print_func_err(__func__, __LINE__, "zhpeq_domain_insert_addr",
