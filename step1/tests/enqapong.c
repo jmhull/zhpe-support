@@ -335,11 +335,12 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
             }
         }
         if (unlikely(conn->epoll)) {
-            ret = zhpeq_rq_epoll(conn->zepoll, (wait_ok ? -1 : 0), NULL, false);
+            ret = zhpeq_rq_epoll(conn->zepoll, (wait_ok ? -1 : 0), NULL, true);
             if (ret < 0)
                 break;
             if (!ret) {
-                assert(!wait_ok);
+                if (wait_ok)
+                    continue;
                 break;
             }
             assert(!conn->epoll);
