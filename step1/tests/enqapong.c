@@ -348,8 +348,6 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
             }
         }
         if (unlikely(conn->epoll)) {
-            if (unlikely(hook_active))
-                captain_hook();
             ret = zhpeq_rq_epoll(conn->zepoll, (wait_ok ? -1 : 0), NULL, true);
             if (ret < 0)
                 break;
@@ -380,6 +378,8 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
         if (zhpeq_rq_epoll_check(conn->zrq, &conn->rx_progress_time, now) &&
             zhpeq_rq_epoll_enable(conn->zrq, &conn->rx_progress_time, now)) {
             /* Yes. */
+            if (unlikely(hook_active))
+                captain_hook();
             conn->epoll = true;
             conn->epoll_cnt++;
         }
@@ -494,6 +494,8 @@ static int do_server_pong(struct stuff *conn)
                 warmup_count = op_count;
                 conn_tx_stats_reset(conn);
                 conn_rx_stats_reset(conn);
+                assert(!conn->epoll);
+                assert(!conn->epoll_cnt);
                 hook_active = true;
             }
             tx_flag_in = msg.flag;
@@ -707,6 +709,8 @@ static int do_client_pong(struct stuff *conn)
                     warmup_count = rx_count;
                     conn_tx_stats_reset(conn);
                     conn_rx_stats_reset(conn);
+                    assert(!conn->epoll);
+                    assert(!conn->epoll_cnt);
                     hook_active = true;
                 }
                 tx_flag_in = msg.flag;
