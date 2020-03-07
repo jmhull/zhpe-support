@@ -130,6 +130,12 @@ static void conn_rx_stats_reset(struct stuff *conn)
 {
     zhpeu_timing_reset(&conn->rx_lat);
     zhpeu_timing_reset(&conn->pp_lat);
+    conn->tx_oos_cnt = 0;
+    conn->tx_oos_max = 0;
+    conn->tx_retry = 0;
+    conn->rx_zseq.rx_oos_cnt = 0;
+    conn->rx_zseq.rx_oos_max = 0;
+    conn->epoll_cnt = 0;
 }
 
 static void conn_stats_print(struct stuff *conn)
