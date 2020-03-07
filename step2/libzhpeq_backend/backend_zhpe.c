@@ -772,8 +772,7 @@ int zhpe_rq_epoll_signal(struct zhpeq_rq_epolli *epolli)
     return ret;
 }
 
-static bool zhpe_rq_epoll_enable(struct zhpeq_rqi *rqi, uint64_t *last,
-                                 uint64_t now)
+static bool zhpe_rq_epoll_enable(struct zhpeq_rqi *rqi)
 {
     struct zepoll_data  *bepoll = rqi->epolli->backend_data;
     struct zhpeq_rqi    *rqi_old = BEPOLL_RQI_DISABLED;
@@ -787,7 +786,6 @@ static bool zhpe_rq_epoll_enable(struct zhpeq_rqi *rqi, uint64_t *last,
     }
 
     /* Update head so interrupts can occur. */
-    __zhpeq_rq_last_update(&rqi->zrq, last, now);
     __zhpeq_rq_head_update(&rqi->zrq, rqi->zrq.head, true);
     /* Did we race with a final delivery? */
     if (!zhpeq_rq_entry(&rqi->zrq) &&

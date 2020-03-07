@@ -105,7 +105,6 @@ struct stuff {
     size_t              epoll_cnt;
     struct zhpeu_timing tx_lat;
     struct zhpeu_timing tx_cmp;
-    uint64_t            rx_progress_time;
     struct zhpeu_timing rx_lat;
     struct zhpeu_timing pp_lat;
     struct zhpeq_rq_epoll *zepoll;
@@ -342,8 +341,6 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
             if (zhpeq_rx_oos_spill(&conn->rx_zseq, 1,
                                    rx_oos_msg_handler, msg_out)) {
                 ret = 1;
-                __zhpeq_rq_last_update(conn->zrq, &conn->rx_progress_time,
-                                       get_cycles_approx());
                 break;
             }
         }
@@ -369,14 +366,14 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
             } else
                 ret = zhpeq_rx_oos_insert(&conn->rx_zseq, msg, msg_seq);
             zhpeq_rq_entry_done(zrq, rqe);
-            zhpeq_rq_head_update(zrq, &conn->rx_progress_time, 0);
+            zhpeq_rq_head_update(zrq, 0);
             if (ret)
                 break;
         }
         /* Start epolling? */
         now = get_cycles_approx();
-        if (zhpeq_rq_epoll_check(conn->zrq, &conn->rx_progress_time, now) &&
-            zhpeq_rq_epoll_enable(conn->zrq, &conn->rx_progress_time, now)) {
+        if (zhpeq_rq_epoll_check(conn->zrq, now) &&
+            zhpeq_rq_epoll_enable(conn->zrq)) {
             /* Yes. */
             if (unlikely(hook_active))
                 captain_hook();

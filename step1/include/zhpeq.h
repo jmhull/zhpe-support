@@ -191,7 +191,9 @@ struct zhpeq_rq {
     struct zhpe_rqinfo  rqinfo;
     volatile void       *qcm;
     union zhpe_hw_rdm_entry *rq;
-    uint64_t            epoll_threshold_cycles;
+    int64_t             epoll_threshold_cycles;
+    uint64_t            rx_last_time;
+    uint32_t            rx_last_head;
     uint32_t            head;
     uint32_t            head_commit;
 };
@@ -457,16 +459,6 @@ int zhpeq_rq_alloc(struct zhpeq_dom *zqdom, int rx_qlen, int slice_mask,
 int zhpeq_rq_alloc_specific(struct zhpeq_dom *zqdom, int rx_qlen,
                             int qspecific, struct zhpeq_rq **zrq_out);
 
-/*
- * Separated for use in the manual-progress case to keep polling from
- * happening.
- */
-static inline void __zhpeq_rq_last_update(struct zhpeq_rq *zrq, uint64_t *last,
-                                          uint64_t now)
-{
-    atm_store_rlx(last, now);
-}
-
 static inline void __zhpeq_rq_head_update(struct zhpeq_rq *zrq, uint32_t qhead,
                                           bool check)
 {
@@ -478,17 +470,16 @@ static inline void __zhpeq_rq_head_update(struct zhpeq_rq *zrq, uint32_t qhead,
     qcmwrite64(qhead & qmask, zrq->qcm, ZHPE_RDM_QCM_RCV_QUEUE_HEAD_OFFSET);
 }
 
-static inline void zhpeq_rq_head_update(struct zhpeq_rq *zrq, uint64_t *last,
+static inline void zhpeq_rq_head_update(struct zhpeq_rq *zrq,
                                         uint32_t threshold)
 {
     if (!threshold)
         threshold = zrq->rqinfo.cmplq.ent / 4;
     if (unlikely(zrq->head - zrq->head_commit > threshold)) {
         /*
-         * Update head and stamp: try to manage unnecessary interrupts by
+         * Update qcm head: try to manage unnecessary interrupts by
          * keeping head 1 behind.
          */
-        __zhpeq_rq_last_update(zrq, last, get_cycles_approx());
         __zhpeq_rq_head_update(zrq, zrq->head - 1, false);
     }
 }
@@ -509,9 +500,13 @@ static inline struct zhpe_rdm_entry *zhpeq_rq_entry(struct zhpeq_rq *zrq)
 static inline void zhpeq_rq_entry_done(struct zhpeq_rq *zrq,
                                        struct zhpe_rdm_entry *rqe)
 {
+    uint32_t            new;
+
     /* Simple rule: do not access the rqe after this call. */
     barrier();
-    zrq->head++;
+    new = zrq->head + 1;
+    /* Not concerned about order, but are about read/write tearing. */
+    atm_store_rlx(&zrq->head, new);
 }
 
 int zhpeq_rq_epoll_alloc(struct zhpeq_rq_epoll **zepoll_out);
@@ -531,21 +526,24 @@ int zhpeq_rq_epoll(struct zhpeq_rq_epoll *zepoll,
 
 int zhpeq_rq_epoll_signal(struct zhpeq_rq_epoll *zepoll);
 
-bool zhpeq_rq_epoll_enable(struct zhpeq_rq *zrq, uint64_t *last, uint64_t now);
+bool zhpeq_rq_epoll_enable(struct zhpeq_rq *zrq);
 
-static inline bool zhpeq_rq_epoll_check(struct zhpeq_rq *zrq,
-                                        uint64_t *last, uint64_t now)
+static inline bool zhpeq_rq_epoll_check(struct zhpeq_rq *zrq, uint64_t now)
 {
+    uint32_t            qhead;
+
     /*
      * Racy, lock-free, lightweight check to see of see should try to enable
-     * epoll. Not perfect, doesn't have to be.
+     * epoll. Not perfect, doesn't have to be. It is assumed that zrq->head
+     * may be updated in another thread, but rx_last_xxx will only be done in
+     * this thread.
      *
      * Usage:
      * now = get_cycles_approx();
      * epoll_enabled = false;
-     * if (unlikely(zhpeq_rq_epoll_check(zrq, &last, now))) {
+     * if (unlikely(zhpeq_rq_epoll_check(zrq, now))) {
      *     lock(); // Locking needed if there are other threads.
-     *     epoll_enabled = zhpeq_rq_epoll_enable(zrq, &last, now);
+     *     epoll_enabled = zhpeq_rq_epoll_enable(zrq);
      *     unlock();
      * }
      * If epoll_enabled is true at this point, it should be safe to rely on
@@ -553,8 +551,16 @@ static inline bool zhpeq_rq_epoll_check(struct zhpeq_rq *zrq,
      * spurious epoll_events are possible, especially after
      * zhpeq_rq_epoll_enable() is called.
      */
+    qhead = atm_load_rlx(&zrq->head);
+    if (likely(qhead != zrq->rx_last_head)) {
+        zrq->rx_last_head = qhead;
+        zrq->rx_last_time = now;
 
-    return ((int64_t)(now - atm_load_rlx(last)) > zrq->epoll_threshold_cycles);
+        return false;
+    }
+
+    return ((int64_t)(now - zrq->rx_last_time) >
+            zrq->epoll_threshold_cycles);
 }
 
 int zhpeq_rq_get_addr(struct zhpeq_rq *zrq, void *sa, size_t *sa_len);
