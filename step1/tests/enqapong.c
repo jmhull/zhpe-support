@@ -124,15 +124,15 @@ static void conn_tx_stats_reset(struct stuff *conn)
 {
     zhpeu_timing_reset(&conn->tx_lat);
     zhpeu_timing_reset(&conn->tx_cmp);
+    conn->tx_oos_cnt = 0;
+    conn->tx_oos_max = 0;
+    conn->tx_retry = 0;
 }
 
 static void conn_rx_stats_reset(struct stuff *conn)
 {
     zhpeu_timing_reset(&conn->rx_lat);
     zhpeu_timing_reset(&conn->pp_lat);
-    conn->tx_oos_cnt = 0;
-    conn->tx_oos_max = 0;
-    conn->tx_retry = 0;
     conn->rx_zseq.rx_oos_cnt = 0;
     conn->rx_zseq.rx_oos_max = 0;
     conn->epoll_cnt = 0;
@@ -319,6 +319,13 @@ static void rx_oos_msg_handler(void *vdata, struct zhpe_enqa_payload *pay)
     memcpy(msg_out, pay, sizeof(*msg_out));
 }
 
+static bool hook_active;
+
+static void captain_hook(void)
+{
+    barrier();
+}
+
 static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
                        bool wait_ok)
 {
@@ -341,6 +348,8 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
             }
         }
         if (unlikely(conn->epoll)) {
+            if (unlikely(hook_active))
+                captain_hook();
             ret = zhpeq_rq_epoll(conn->zepoll, (wait_ok ? -1 : 0), NULL, true);
             if (ret < 0)
                 break;
@@ -485,6 +494,7 @@ static int do_server_pong(struct stuff *conn)
                 warmup_count = op_count;
                 conn_tx_stats_reset(conn);
                 conn_rx_stats_reset(conn);
+                hook_active = true;
             }
             tx_flag_in = msg.flag;
         }
@@ -695,7 +705,9 @@ static int do_client_pong(struct stuff *conn)
             if (msg.flag != tx_flag_in) {
                 if (tx_flag_in == TX_WARMUP) {
                     warmup_count = rx_count;
+                    conn_tx_stats_reset(conn);
                     conn_rx_stats_reset(conn);
+                    hook_active = true;
                 }
                 tx_flag_in = msg.flag;
             }
