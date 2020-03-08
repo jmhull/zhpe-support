@@ -38,6 +38,10 @@
 #include <zhpeq.h>
 #include <zhpeq_util.h>
 
+#undef  get_cycles
+#define get_cycles(...) (0)
+#define zhpeu_timing_update(...) do {} while (0)
+
 #define BACKLOG         (10)
 #ifdef DEBUG
 #define TIMEOUT         (-1)
@@ -318,13 +322,6 @@ static void rx_oos_msg_handler(void *vdata, struct zhpe_enqa_payload *pay)
     memcpy(msg_out, pay, sizeof(*msg_out));
 }
 
-static bool hook_active;
-
-static void captain_hook(void)
-{
-    barrier();
-}
-
 static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
                        bool wait_ok)
 {
@@ -375,8 +372,6 @@ static int conn_rx_msg(struct stuff *conn, struct enqa_msg *msg_out,
         if (zhpeq_rq_epoll_check(conn->zrq, now) &&
             zhpeq_rq_epoll_enable(conn->zrq)) {
             /* Yes. */
-            if (unlikely(hook_active))
-                captain_hook();
             conn->epoll = true;
             conn->epoll_cnt++;
         }
@@ -491,9 +486,6 @@ static int do_server_pong(struct stuff *conn)
                 warmup_count = op_count;
                 conn_tx_stats_reset(conn);
                 conn_rx_stats_reset(conn);
-                assert(!conn->epoll);
-                assert(!conn->epoll_cnt);
-                hook_active = true;
             }
             tx_flag_in = msg.flag;
         }
@@ -524,7 +516,7 @@ static void do_pci_rd(struct stuff *conn, uint ops)
     struct zhpeq_rq     *zrq = conn->zrq;
     uint                i;
     struct zhpeu_timing pci_rd;
-    uint64_t            start;
+    uint64_t            start MAYBE_UNUSED;
 
     zhpeu_timing_reset(&pci_rd);
     for (i = 0; i < ops; i++) {
@@ -541,7 +533,7 @@ static int do_nop(struct stuff *conn, uint ops)
     struct zhpeq_tq     *ztq = conn->ztq;
     struct zhpe_cq_entry *cqe;
     uint                i;
-    uint64_t            start;
+    uint64_t            start MAYBE_UNUSED;
     union zhpe_hw_wq_entry *wqe;
 
     conn_tx_stats_reset(conn);
@@ -657,8 +649,10 @@ static int do_client_pong(struct stuff *conn)
     uint64_t            warmup_count;
     struct enqa_msg     msg;
     uint64_t            start;
-    uint64_t            now;
+    uint64_t            now MAYBE_UNUSED;
     uint64_t            delta;
+    struct timespec     ts_beg;
+    struct timespec     ts_end;
 
     zhpeq_print_tq_info(conn->ztq);
 
@@ -706,9 +700,7 @@ static int do_client_pong(struct stuff *conn)
                     warmup_count = rx_count;
                     conn_tx_stats_reset(conn);
                     conn_rx_stats_reset(conn);
-                    assert(!conn->epoll);
-                    assert(!conn->epoll_cnt);
-                    hook_active = true;
+                    clock_gettime_monotonic(&ts_beg);
                 }
                 tx_flag_in = msg.flag;
             }
@@ -764,9 +756,12 @@ static int do_client_pong(struct stuff *conn)
             conn->msg_tx_seq++;
         }
     }
+    clock_gettime_monotonic(&ts_end);
 
-    zhpeu_print_info("%s:op_cnt/warmup %lu/%lu\n",
-                     zhpeu_appname, tx_count - warmup_count, warmup_count);
+    zhpeu_print_info("%s:op_cnt/warmup %lu/%lu lat %.3f\n",
+                     zhpeu_appname, tx_count - warmup_count, warmup_count,
+                     cycles_to_usec(ts_delta(&ts_beg, &ts_end),
+                                    (tx_count - warmup_count) * 2));
     conn_stats_print(conn);
 
  done:
