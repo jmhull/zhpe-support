@@ -38,8 +38,7 @@
 #include <zhpeq.h>
 #include <zhpeq_util.h>
 
-#undef  get_cycles
-#define get_cycles(...) (0)
+#define get_cyc(...)    (0)
 #define zhpeu_timing_update(...) do {} while (0)
 
 #define BACKLOG         (10)
@@ -174,7 +173,7 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start,
 {
     int32_t             ret;
     struct zhpeq_tq     *ztq = conn->ztq;
-    uint64_t            start = get_cycles(NULL);
+    uint64_t            start = get_cyc(NULL);
     struct enqa_msg     *msg;
     union zhpe_hw_wq_entry *wqe;
 
@@ -198,7 +197,7 @@ static int conn_tx_msg(struct stuff *conn, uint64_t pp_start,
     zhpeq_tq_insert(ztq, ret);
     zhpeq_tq_commit(ztq);
     conn->tx_avail--;
-    zhpeu_timing_update(&conn->tx_lat, get_cycles(NULL) - start);
+    zhpeu_timing_update(&conn->tx_lat, get_cyc(NULL) - start);
 
  done:
     return ret;
@@ -268,7 +267,7 @@ static int conn_tx_completions(struct stuff *conn, bool qfull_ok, bool qd_check)
             goto done;
         }
         zhpeu_timing_update(&conn->tx_cmp,
-                            get_cycles(NULL) - be64toh(msg->tx_start));
+                            get_cyc(NULL) - be64toh(msg->tx_start));
         oos = (int32_t)(msg->tx_seq - ztq->cq_head);
         zhpeq_tq_cq_entry_done(ztq, cqe);
         if (unlikely(oos)) {
@@ -490,7 +489,7 @@ static int do_server_pong(struct stuff *conn)
             tx_flag_in = msg.flag;
         }
         zhpeu_timing_update(&conn->rx_lat,
-                            get_cycles(NULL) - be64toh(msg.tx_start));
+                            get_cyc(NULL) - be64toh(msg.tx_start));
 
         ret = _conn_tx_msg_retry(conn, msg.pp_start,
                                  htobe32(conn->msg_tx_seq++),  msg.flag);
@@ -520,9 +519,9 @@ static void do_pci_rd(struct stuff *conn, uint ops)
 
     zhpeu_timing_reset(&pci_rd);
     for (i = 0; i < ops; i++) {
-        start = get_cycles(NULL);
+        start = get_cyc(NULL);
         qcmread64(zrq->qcm, ZHPE_RDM_QCM_RCV_QUEUE_HEAD_OFFSET);
-        zhpeu_timing_update(&pci_rd, get_cycles(NULL) - start);
+        zhpeu_timing_update(&pci_rd, get_cyc(NULL) - start);
     }
     zhpeu_timing_print(&pci_rd, "pci_rd", 1);
 }
@@ -547,11 +546,11 @@ static int do_nop(struct stuff *conn, uint ops)
         }
         wqe = zhpeq_tq_get_wqe(ztq, ret);
         zhpeq_tq_nop(wqe, 0);
-        start = get_cycles(NULL);
+        start = get_cyc(NULL);
         zhpeq_tq_insert(ztq, ret);
         zhpeq_tq_commit(ztq);
         while (!(cqe = zhpeq_tq_cq_entry(ztq)));
-        zhpeu_timing_update(&conn->tx_cmp, get_cycles(NULL) - start);
+        zhpeu_timing_update(&conn->tx_cmp, get_cyc(NULL) - start);
         zhpeq_tq_cq_entry_done(ztq, cqe);
     }
     conn_stats_print(conn);
@@ -683,7 +682,7 @@ static int do_client_pong(struct stuff *conn)
      */
     conn_tx_stats_reset(conn);
     conn_rx_stats_reset(conn);
-    start = get_cycles(NULL);
+    start = get_cyc(NULL);
     for (tx_count = rx_count = warmup_count = 0;
          tx_count != rx_count || tx_flag_out != TX_LAST; ) {
         /* Receive packets up to first miss. */
@@ -704,7 +703,7 @@ static int do_client_pong(struct stuff *conn)
                 }
                 tx_flag_in = msg.flag;
             }
-            now = get_cycles(NULL);
+            now = get_cyc(NULL);
             zhpeu_timing_update(&conn->rx_lat, now - be64toh(msg.tx_start));
             zhpeu_timing_update(&conn->pp_lat, now - be64toh(msg.pp_start));
         }
@@ -718,7 +717,7 @@ static int do_client_pong(struct stuff *conn)
 
             /* Compute delta based on cycles/ops. */
             if (args->seconds_mode)
-                delta = get_cycles(NULL) - start;
+                delta = get_cyc(NULL) - start;
             else
                 delta = tx_count;
 
