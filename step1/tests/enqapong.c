@@ -38,8 +38,7 @@
 #include <zhpeq.h>
 #include <zhpeq_util.h>
 
-#define get_cyc(...)    (0)
-#define zhpeu_timing_update(...) do {} while (0)
+#define get_cyc(...)    get_cycles(__VA_ARGS__)
 
 #define BACKLOG         (10)
 #ifdef DEBUG
