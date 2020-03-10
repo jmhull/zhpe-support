@@ -759,8 +759,8 @@ static int do_client_pong(struct stuff *conn)
 
     zhpeu_print_info("%s:op_cnt/warmup %lu/%lu lat %.3f\n",
                      zhpeu_appname, tx_count - warmup_count, warmup_count,
-                     cycles_to_usec(ts_delta(&ts_beg, &ts_end),
-                                    (tx_count - warmup_count) * 2));
+                     (((double)ts_delta(&ts_beg, &ts_end) * USEC_PER_SEC) /
+                      ((double)NSEC_PER_SEC * (tx_count - warmup_count) * 2)));
     conn_stats_print(conn);
 
  done:
