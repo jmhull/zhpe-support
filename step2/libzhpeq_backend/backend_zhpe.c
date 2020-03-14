@@ -1219,6 +1219,7 @@ static int zhpe_mmap(const struct zhpeq_mr_desc_v1 *desc_orig,
     zmdesc = xmalloc(sizeof(*zmdesc));
     desc = xmalloc(sizeof(*desc));
     *desc  = *desc_orig;
+    desc->hdr.version &= ~ZHPEQ_MR_VREG;
     qkdata = &desc->qkdata;
     zmdesc->qkdata = qkdata;
 
@@ -1233,6 +1234,7 @@ static int zhpe_mmap(const struct zhpeq_mr_desc_v1 *desc_orig,
         qkdata->z.zaddr = 0;
         goto done;
     }
+    desc->hdr.version |= ZHPEQ_MR_VREG;
 
     zmdesc->addr = _zhpeu_mmap(addr, length, prot, flags, dev_fd, pgoff);
     if (!zmdesc->addr) {
