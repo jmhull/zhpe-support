@@ -450,16 +450,16 @@ static int cli_atomic(struct stuff *conn,
     if (op >= FI_CSWAP)
         ret = fi_compare_atomic(fab_conn->ep, &ctx->operand1, 1, NULL,
                                 &ctx->operand0, NULL, original, NULL,
-                                conn->dest_av, conn->remote_addr + off,
-                                conn->remote_key, type, op, ctx);
+                                conn->dest_av, conn->rem.remote_addr + off,
+                                conn->rem.remote_key, type, op, ctx);
     else if (original)
         ret = fi_fetch_atomic(fab_conn->ep, &ctx->operand0, 1, NULL,
                               original, NULL, conn->dest_av,
-                              conn->remote_addr + off, conn->remote_key,
+                              conn->rem.remote_addr + off, conn->rem.remote_key,
                               type, op, ctx);
     else
         ret = fi_atomic(fab_conn->ep, &ctx->operand0, 1, NULL, conn->dest_av,
-                        conn->remote_addr + off, conn->remote_key,
+                        conn->rem.remote_addr + off, conn->rem.remote_key,
                         type, op, ctx);
     if (ret < 0) {
         print_func_errn(__func__, __LINE__, "fi_xxx_atomic", op, false, ret);
@@ -489,8 +489,8 @@ static int cli_bad_test(struct stuff *conn, const char *lbl, enum fi_op op)
         ret = -FI_EAGAIN;
         goto done;
     }
-    ctx->operand.u64 = 1;
-    ret = fi_fetch_atomic(fab_conn->ep, &ctx->operand, 1, NULL,
+    ctx->operand0.u64 = 1;
+    ret = fi_fetch_atomic(fab_conn->ep, &ctx->operand0, 1, NULL,
                           &result, NULL, conn->dest_av,
                           conn->rem.bad_addr, conn->rem.bad_key,
                           FI_UINT64, op, ctx);

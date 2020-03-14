@@ -881,14 +881,14 @@ int zhpeq_rq_epoll_signal(struct zhpeq_rq_epoll *zepoll)
     return ret;
 }
 
-bool zhpeq_rq_epoll_enable(struct zhpeq_rq *zrq, uint64_t *last, uint64_t now)
+bool zhpeq_rq_epoll_enable(struct zhpeq_rq *zrq)
 {
     struct zhpeq_rqi    *rqi = container_of(zrq, struct zhpeq_rqi, zrq);
 
     if (!zrq || !rqi->epolli)
         return false;
 
-    return zhpe_rq_epoll_enable(rqi, last, now);
+    return zhpe_rq_epoll_enable(rqi);
 }
 
 int zhpeq_rq_get_addr(struct zhpeq_rq *zrq, void *sa, size_t *sa_len)
